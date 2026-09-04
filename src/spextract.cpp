@@ -1479,8 +1479,15 @@ protected:
   {
     registerInputFile_("in", "<file>", "", "Input diaPASEF data (ion-mobility DIA; 1/K0 / VSSC): mzML, mzPeak, or a Bruker .d directory.");
     setValidFormats_("in", {"mzML", "mzpeak", "d"});
-    registerOutputFile_("out", "<file>", "", "Output pseudo-MS2 mzML (searchable by a DDA engine).");
-    setValidFormats_("out", {"mzML"});
+    registerOutputFile_("out", "<file>", "", "Output pseudo-MS2 spectra. The FORMAT FOLLOWS THE "
+                        "EXTENSION: .mzpeak (default) or .mzML. mzPeak is columnar and much smaller; "
+                        "mzML is what DDA search engines read today, so pass an .mzML name (or "
+                        "-out_type mzML) if the next step is a search.");
+    setValidFormats_("out", {"mzpeak", "mzML"});
+    registerStringOption_("out_type", "<type>", "", "Force the output format instead of taking it "
+                          "from the extension of -out. Empty = follow the extension; mzPeak if the "
+                          "extension says nothing.", false);
+    setValidStrings_("out_type", {"", "mzpeak", "mzML"});
 
     registerTOPPSubsection_("gate", "Precursor-to-fragment co-localization gate");
     // Conservative, documented defaults; these are placeholders pending a real-data sweep. [H-3]
@@ -2589,11 +2596,28 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     assembleFromList_(pc, win_lo, win_hi, frags, frag_scores, min_frags, max_frags, out);
   }
 
-  ExitCodes main_(int, const char**) override
+  ExitCodes main_(int argc, const char** argv) override
   {
     phase_clock_();   // [perf-instr] fix the epoch HERE: it is a first-call static, and the
                       // streaming path first touched it only AFTER loading, so load time was
                       // invisible and every [t=..] was relative to post-load. [codex review]
+
+    // -threads defaults to 1 in TOPPBase, a poor default for a tool whose window loop IS the
+    // runtime. Default to every core. The command line is scanned rather than the value tested,
+    // so that an EXPLICIT `-threads 1` still means one thread: testing `value == 1` alone would
+    // silently override the one user who actually wants it serial.
+    int n_threads_req = getIntOption_("threads");
+    {
+      bool given = false;
+      for (int i = 1; i < argc && !given; ++i) given = (String(argv[i]) == "-threads");
+      if (!given && n_threads_req == 1)
+      {
+        n_threads_req = std::max(1, (int)std::thread::hardware_concurrency());
+        omp_set_num_threads(n_threads_req);
+        writeLogInfo_("-threads not given: using all " + String(n_threads_req) + " cores. Pass "
+                      "-threads <n> to limit it, which is what you want on a shared machine.");
+      }
+    }
     const String in = getStringOption_("in");
     const String out = getStringOption_("out");
     const double delta_im = getDoubleOption_("gate:delta_im");
@@ -2645,7 +2669,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         if (FileHandler::getTypeByFileName(in) == FileTypes::MZPEAK)
         {
 #ifdef SPEXTRACT_WITH_MZPEAK
-          spx::loadMzPeakStreaming(in, consumer, getIntOption_("threads"));   // consumer counts frames itself
+          spx::loadMzPeakStreaming(in, consumer, n_threads_req);   // consumer counts frames itself
 #else
           throw Exception::NotImplemented(__FILE__, __LINE__, "streaming .mzpeak input needs a build with -DMZPEAK_ROOT");
 #endif
@@ -3981,9 +4005,25 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     out_exp.setMetaValue("spx:im_weight_sigma", im_weight_sigma_);
     out_exp.setMetaValue("spx:require_isotope_support",
                          (int)(getStringOption_("assembly:require_isotope_support") == "true"));
-    { Phase _ph("WRITE(mzML)");
-      FileHandler().storeExperiment(out, out_exp, {FileTypes::MZML}, log_type_); }
-    writeLogInfo_("Wrote " + String(n_out) + " pseudo-MS2 spectra to " + out);
+    // Output format. The extension is authoritative, because that is what a user typing
+    // `-out pseudo.mzML` means; -out_type overrides it; mzPeak is the default when neither says.
+    FileTypes::Type out_type = FileTypes::UNKNOWN;
+    const String out_type_opt = getStringOption_("out_type");
+    if (!out_type_opt.empty())
+      { String t = out_type_opt; t.toLower(); out_type = (t == "mzml") ? FileTypes::MZML : FileTypes::MZPEAK; }
+    else
+    {
+      const FileTypes::Type by_name = FileHandler::getTypeByFileName(out);
+      out_type = (by_name == FileTypes::MZML || by_name == FileTypes::MZPEAK) ? by_name
+                                                                             : FileTypes::MZPEAK;
+    }
+    if (out_type == FileTypes::MZPEAK)
+      writeLogInfo_("Writing mzPeak. NOTE: DDA search engines read mzML, not mzPeak -- if this file "
+                    "is going straight into a search, write .mzML instead (or -out_type mzML).");
+    { Phase _ph(out_type == FileTypes::MZPEAK ? "WRITE(mzPeak)" : "WRITE(mzML)");
+      FileHandler().storeExperiment(out, out_exp, {out_type}, log_type_); }
+    writeLogInfo_("Wrote " + String(n_out) + " pseudo-MS2 spectra to " + out
+                  + " (" + String(FileTypes::typeToName(out_type)) + ")");
     report_phases_(phase_clock_());
     return EXECUTION_OK;
   }

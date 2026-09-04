@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## v1.1.0 — 2026-09-04
+
+### Changed
+- **`-threads` now defaults to every core** instead of 1. The window loop is the runtime, so a
+  single-threaded default was wrong for anyone who did not know to override it. An explicit
+  `-threads 1` is still honoured: the command line is inspected rather than the value compared, so
+  the one user who genuinely wants it serial is not overridden. Measured on a 224-core machine,
+  all-cores against the benchmark's `-threads 100`: 5:10 vs 5:22 wall for identical output. The gain
+  over 100 threads is small because window concurrency is bounded by a free-RAM admission gate, not
+  by cores; the gain over the previous default of 1 is not small.
+- **The output format now follows the `-out` extension, and `.mzpeak` is the default** when the name
+  does not say. `-out_type` forces it. mzPeak is a columnar archive and lands at roughly a third the
+  size of the equivalent mzML (2.25 GB vs 6.23 GB on the same run, same 655,776 spectra).
+
+  **Know what this costs before relying on it.** DDA search engines read mzML, not mzPeak, and
+  OpenMS' own `FileConverter` does not accept mzPeak as an input type. If the output is going into
+  a search — which is the tool's usual purpose — write `.mzML`. The tool warns whenever it writes
+  mzPeak, for exactly this reason.
+
+
 ## v1.0.0 — 2026-09-04
 
 First public release. Same code as v0.3.0; this is the point at which the project became a
