@@ -17,11 +17,10 @@ jobs:
           - { os: ubuntu-latest,  cc: gcc }
           - { os: ubuntu-22.04,   cc: gcc-11 }
           - { os: macos-latest,   cc: appleclang-arm64 }
-          - { os: macos-13,       cc: appleclang-x86_64 }
           - { os: windows-latest, cc: msvc }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
