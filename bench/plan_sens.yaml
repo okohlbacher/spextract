@@ -1,0 +1,65 @@
+title: "sensitivity floor: does the co-elution gate strip real fragments from FAINT precursors?"
+# The coverage analysis located the gap: the peptides we lose are 3.2x dimmer, everything
+# structural is flat (charge exactly 1.00), and we ALREADY emit a spectrum at ~90% of their
+# coordinates (class B, 16% decoy floor, positive control passing). So the failure is that the
+# spectrum we emit at a faint precursor is too THIN to identify: 9 matched peaks and 8.45%
+# matched intensity, vs 12 and 17.41% for peptides we do get.
+#
+# Mechanism under test: gate:min_correlation=0.3 admits a fragment only if its XIC correlates
+# >=0.3 with the precursor's. Pearson correlation of two noisy profiles is attenuated toward 0 as
+# S/N falls, so this gate is systematically biased AGAINST low-abundance precursors -- it strips
+# true fragments exactly where we are already losing peptides. Lowering it should thicken faint
+# spectra. The MS1 arm tests the other half: whether the precursor XIC that the gate correlates
+# against is itself too noisy/short at low abundance (MS1 side is still strict: noise 100, snr 3).
+#
+# Falsification, pre-registered: if peptides do not rise at 0.20 or 0.12, the co-elution gate is
+# NOT the sensitivity floor and this lever joins the four already closed (max_fragments, density,
+# charge, de-chimerization). A rise bought by a large PSM/redundancy increase without peptide gain
+# is NOT a win -- peptides at peptide_q<=0.01 is the metric.
+samples: [dataset D]
+binary: /path/to/scratch/rv/opt/bin/spextract
+threads: 128
+arms:
+  - name: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+  - name: corr020
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.20
+  - name: corr012
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.12
+  - name: ms1sens
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      trace:noise_threshold_int: 10
+      trace:ms1_chrom_peak_snr: 1.0

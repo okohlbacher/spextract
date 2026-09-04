@@ -1,0 +1,59 @@
+title: "co-elution gate: locate the optimum -- the sweep is still rising at 0.50"
+# Six measured points, monotone increasing, NO turnover:
+#   0.12 -> 9,696 | 0.20 -> 9,829 | 0.30 (shipped) -> ~10,122 (3 reps) | 0.40 -> 10,380 | 0.50 -> 10,657
+# PSMs fall (90,176 -> 88,130) while peptides rise: redundancy converting into coverage, exactly the
+# direction that matters given we over-produce PSMs 8.9/peptide vs the reference implementation's 1.69.
+# Replicate spread on base is 0.34% (10,124/10,138/10,104), so these gains are 8-16x noise.
+#
+# Pre-registered: the optimum is the highest peptide count whose gain exceeds the 0.34% spread.
+# If peptides are STILL rising at 0.80, report that the sweep is unbounded in the tested range and
+# do NOT pick a default -- an unbounded monotone trend means the parameter is standing in for
+# something else (likely: the gate is the only thing suppressing the fragment fan-out that inflates
+# our PSM/peptide ratio) and that mechanism must be understood before shipping a value.
+# Adoption still requires replication on dataset B/dataset A regardless.
+samples: [dataset D]
+binary: /path/to/scratch/rv/opt/bin/spextract
+threads: 128
+arms:
+  - name: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+  - name: corr060
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.60
+  - name: corr070
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.70
+  - name: corr080
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.80

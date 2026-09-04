@@ -1,0 +1,45 @@
+title: "min_correlation tightening: portability to dataset B/dataset A (the entrapment-confirmed dataset D winner)"
+# On dataset D, gate:min_correlation 0.3->0.6 gained +840 peptides that entrapment confirmed carry no
+# extra error (86 hits vs 99 expected, -1.3 sigma). Project policy: a small effect must replicate
+# on a second sample before the default moves, because Sage's sample-to-sample offset drift is
+# comparable to a 2-5% effect. This tests base vs 0.5 and 0.6 on BOTH other samples, one binary,
+# one invocation per the harness -- so a per-sample delta cannot be a cross-config artefact.
+#
+# Pre-registered, same rule as the dataset D work: a win must (a) gain peptides at nominal q<=0.01 AND
+# (b) not raise the entrapment error rate (scored after). If the direction flips sign on dataset B or dataset A,
+# the dataset D gain was sample-specific and the default stays at 0.3.
+samples: [dataset B, dataset A]
+binary: /path/to/scratch/OpenMS/build/bin/spextract
+threads: 100
+arms:
+  - name: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+  - name: corr050
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.50
+  - name: corr060
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.60

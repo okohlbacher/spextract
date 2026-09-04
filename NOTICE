@@ -1,0 +1,22 @@
+SpeXtract
+Copyright (c) 2026 Oliver Kohlbacher and contributors
+
+This product is derived from and links against OpenMS.
+
+  OpenMS -- Open-Source Mass Spectrometry
+  Copyright (c) OpenMS Team
+  Licensed under the BSD 3-Clause License
+  https://github.com/OpenMS/OpenMS
+
+src/spextract.cpp originated as a TOPP tool inside the OpenMS source tree and
+was extracted into this standalone repository. It uses OpenMS classes including
+MassTraceDetection, ElutionPeakDetection, PeakPickerIM, BrukerTimsFile and
+FullSwathFileConsumer, and retains OpenMS's BSD-3-Clause terms.
+
+Algorithmic ideas were reviewed against, but no code was taken from:
+
+  the reference implementation (Nesvizhskii Lab)     -- pseudo-MS/MS extraction from diaPASEF
+  AlphaDIA (Mann Lab, Apache-2.0) -- feature-free extraction; the log-sum co-elution
+                                     statistic here is an independent reimplementation
+                                     of a published idea, not a port
+  DIA-NN                          -- used only to produce reference annotations

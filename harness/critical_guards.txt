@@ -1,0 +1,18 @@
+# Guards covering failures that have ALREADY HAPPENED in this project.
+# Format: MODULE GUARD MESSAGE_FRAGMENT
+# Pinned to message CONTENT, not line number: adding a test above a guard shifts every line
+# below it, and a line-pinned critical then silently matches nothing. That happened -- the
+# first gate reported "PASSED (6 entries)" while actually checking two.
+# An entry matching nothing is an ERROR, not a pass.
+
+# FAILURE 1 -- cross-sample comparison (published a ratio dividing an dataset D result by dataset A's
+# reference; occurred 3x). The PRODUCTION checks, not the selftest's reimplementation.
+bench2.py G-B05 raw content digest
+bench2.py G-B05 acquisition identity
+
+# FAILURE 7 -- 6-hour benchmark ran against a stale binary; TOCTOU on the raw input.
+bench2.py G-B13 RETARGETED
+bench2.py G-B13 changed during the run
+
+# FAILURE 8 -- v1 applied a hardcoded 24-tile WINDOWS_S23 to every sample.
+collate2.py G-C10 no acquisition window table

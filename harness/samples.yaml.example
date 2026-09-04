@@ -1,0 +1,50 @@
+# EXAMPLE sample registry. Copy to harness/samples.yaml and fill in real paths.
+#
+# harness/samples.yaml itself is NOT tracked: it names acquisitions and specimens, and this
+# repository is meant to be publishable. Keep identifiers in your untracked local copy.
+# Sample registry. The ONLY place a sample's paths and references are defined.
+#
+# Every cross-sample error in this project came from a number whose sample was implicit.
+# Nothing in the harness accepts a bare path: it accepts a sample ID, looks it up here, and
+# stamps that ID into every artefact it writes. A reference belongs to exactly one sample and
+# cannot be applied to another.
+
+samples:
+  dataset_A:
+    raw: /path/to/scratch/rawd/<acquisition-A>.d
+    # substring that MUST appear in the raw path and in the output mzML header.
+    # Guards against a run being labelled with the wrong sample.
+    fingerprint: "<fingerprint-A>"
+    references:
+      reference_mzml: /path/to/reference-data/mzml_reference/<acquisition-A>
+      diann_report:   /path/to/scratch/bench/s08/diann/report.parquet
+      diann_lib:      /path/to/scratch/bench/s08/diann/report-lib.parquet
+
+  dataset_B:
+    raw: /path/to/scratch/rawd/<acquisition-B>.d
+    fingerprint: "<fingerprint-B>"
+    references:
+      reference_mzml: /path/to/reference-data/mzml_reference/<acquisition-B>
+      diann_report:   /path/to/scratch/bench/s23_diann/report.parquet
+      diann_lib:      /path/to/scratch/bench/s23_diann/report-lib.parquet
+
+  dataset_D:
+    raw: /path/to/scratch/rawd/<acquisition-D>.d
+    fingerprint: "<fingerprint-D>"
+    references:
+      reference_mzml: /path/to/reference-data/mzml_reference/<acquisition-D>
+      diann_report:   /path/to/scratch/bench/s30_diann/report.parquet
+      diann_lib:      /path/to/scratch/bench/s30_diann/report-lib.parquet
+
+  # Present in mzml_reference/ but never used. Listed so they are visible rather than
+  # rediscovered; raw/diann must be filled in before they can be run.
+  dataset_C: {raw: null, fingerprint: "<fingerprint-C>",  references: {reference_mzml: /path/to/reference-data/mzml_reference/<acquisition-C>}}
+  dataset_E: {raw: null, fingerprint: "<fingerprint-E>", references: {reference_mzml: /path/to/reference-data/mzml_reference/<acquisition-E>}}
+  dataset_F: {raw: null, fingerprint: "<fingerprint-F>", references: {reference_mzml: /path/to/reference-data/mzml_reference/<acquisition-F>}}
+
+search:
+  sage_binary: /path/to/scratch/bench/sage-v0.14.7-x86_64-unknown-linux-gnu/sage
+  sage_config: /path/to/scratch/bench/sage_deiso.json
+  fasta:       /path/to/scratch/bench/human.fasta
+
+vault: <repo>/docs/benchmarks

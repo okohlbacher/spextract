@@ -1,0 +1,32 @@
+title: "#1 corrected (node-2 re-run): de-chimerize the top-150, both arms one binary"
+# The node-1 pair was lost mid-run to a maintenance shutdown, and node-2's available build
+# (sha 95a1ba38, 2026-07-23 13:29) is NOT the one the interrupted base arm used (5790f4e9,
+# 17:30). Mixing them would be FAILURE 7. So BOTH arms re-run here under one binary; the pair is
+# internally valid and the sha is stamped into each manifest.
+#
+# This build predates the trace_bands=12 default (it ships 0), so both arms pass it EXPLICITLY —
+# identical across the pair, and matching shipped behaviour rather than this build's stale default.
+samples: [dataset D]
+binary: /path/to/scratch/rv/opt/bin/spextract
+threads: 128
+arms:
+  - name: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+  - name: rpmax1
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      assembly:rp_max: 1

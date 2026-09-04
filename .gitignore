@@ -1,0 +1,12 @@
+build/
+*.mzML
+*.parquet
+*.tsv
+__pycache__/
+
+# Sample registry: real acquisition and specimen paths, never committed.
+harness/samples.yaml
+
+# Benchmark drivers with real acquisition paths, never committed.
+bench/run_joint.sh
+bench/run_open.sh

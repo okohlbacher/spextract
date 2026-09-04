@@ -1,0 +1,73 @@
+name: full build
+
+# SpeXtract cannot be built against any RELEASED OpenMS package, and that is a property of the
+# tool, not of CI:
+#   * it includes <OpenMS/FORMAT/TdfMzCalibration.h>, which scripts/apply_openms_patches.sh
+#     installs INTO the OpenMS tree;
+#   * it calls BrukerTimsFile::lastMzCalibration, which the same patch ADDS to OpenMS;
+#   * it uses BrukerTimsFile::loadDIAStreaming and PeakPickerIM, which postdate OpenMS 3.5.0,
+#     the newest tagged release.
+# So a real build needs OpenMS built from source at 3.6 and then patched. That takes about an hour
+# with a warm cache, which is why it does not run on every push. It runs weekly and on demand, and
+# it is the only job here that proves the tool still compiles.
+#
+# It is deliberately NOT continue-on-error. A build job that is allowed to fail quietly is worse
+# than no build job: it reports green while the tool does not compile.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'      # Mondays, 04:00 UTC
+
+jobs:
+  linux:
+    name: ubuntu-latest, OpenMS from source + patches
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: spextract }
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build ccache \
+            qt6-base-dev libqt6svg6-dev \
+            libboost-all-dev libeigen3-dev libxerces-c-dev libbz2-dev zlib1g-dev \
+            libglpk-dev libsvm-dev libhdf5-dev libsqlite3-dev
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: openms-${{ runner.os }}
+          max-size: 2G
+
+      - name: Check out OpenMS
+        run: git clone --depth 1 --branch develop https://github.com/OpenMS/OpenMS.git
+
+      - name: Apply the SpeXtract patches to OpenMS
+        run: spextract/scripts/apply_openms_patches.sh "$GITHUB_WORKSPACE/OpenMS"
+
+      - name: Build OpenMS
+        run: |
+          cmake -S OpenMS -B OpenMS/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DWITH_GUI=OFF -DHAS_XSERVER=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build OpenMS/build --target OpenMS
+
+      - name: Build SpeXtract
+        run: |
+          cmake -S spextract -B spextract/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DOpenMS_DIR="$GITHUB_WORKSPACE/OpenMS/build" \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build spextract/build
+
+      - name: The binary runs and reports itself
+        run: |
+          spextract/build/spextract --help | head -5
+          spextract/build/spextract --help | grep -q '^SpeXtract' \
+            || { echo "the tool does not identify itself as SpeXtract"; exit 1; }
+
+      - name: End-to-end suite against the freshly built binary
+        run: python3 spextract/test/test_spextract.py spextract/build/spextract

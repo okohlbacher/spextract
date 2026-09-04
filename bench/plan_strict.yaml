@@ -1,0 +1,50 @@
+title: "co-elution gate, STRICT direction: the loosening sweep's derivative says 0.3 may be too loose"
+# The loosening sweep was monotone in the direction OPPOSITE to the hypothesis:
+#   min_correlation 0.12 -> 9,696 | 0.20 -> 9,829 | 0.30 (base) -> 10,138 peptides
+# Peptides rise WITH strictness across the entire tested range, with PSMs flat (+-0.2%) and emitted
+# spectra flat (+0.3%) -- loosening converts unique peptides into redundant re-identifications
+# because Sage scores only the top-150 BY INTENSITY and admitted noise displaces true fragments.
+# This extends the same sweep past the current default instead of extrapolating from it.
+#
+# Pre-registered:
+#   * peptides rise at 0.40 and/or 0.50 -> the shipped default 0.3 is too loose; the gain is real
+#     and the new optimum should be adopted only after replication on a second sample (dataset B/dataset A).
+#   * peptides flat/fall -> 0.3 is at or near the optimum; the gate is fully characterised and
+#     CLOSED in both directions. No further gate work.
+# A PSM-only gain does NOT count: peptides at peptide_q<=0.01 is the metric, since we already
+# over-produce PSMs 8.98/peptide vs the reference implementation's 1.66.
+samples: [dataset D]
+binary: /path/to/scratch/rv/opt/bin/spextract
+threads: 128
+arms:
+  - name: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+  - name: corr040
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.40
+  - name: corr050
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      gate:min_correlation: 0.50

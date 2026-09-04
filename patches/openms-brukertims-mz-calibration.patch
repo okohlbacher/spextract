@@ -1,0 +1,570 @@
+--- src/openms/include/OpenMS/PROCESSING/CENTROIDING/PeakPickerIM.h
++++ src/openms/include/OpenMS/PROCESSING/CENTROIDING/PeakPickerIM.h
+@@ -141,6 +141,7 @@
+     int sgolay_polynomial_order_{3};
+     double ppm_tolerance_cluster_{50.0};
+     double im_tolerance_cluster_{0.1};
++    std::string mz_mode_{"weighted"};   // [SpeXtract pick-mz] weighted | seed | top3
+ 
+     double ppm_tolerance_elution_{50.0};
+ 
+--- src/openms/source/FORMAT/BrukerTimsFile.cpp
++++ src/openms/source/FORMAT/BrukerTimsFile.cpp
+@@ -17,6 +17,14 @@
+ 
+ #include <opentims++/opentims.h>
+ #include <opentims++/tof2mz_converter.h>
++#include <opentims++/zstd/zstd.h>   // [par-load] per-thread ZSTD_DCtx (opentims bundles zstd)
++#include <chrono>
++#include <cstdio>
++#ifdef _OPENMP
++#include <omp.h>
++#endif
++namespace { struct PerfLoad { double decode = 0, handoff = 0, ms1_decode = 0, ms1_handoff = 0; size_t batches = 0;
++  ~PerfLoad() { std::fprintf(stderr, "[perf-load] ms2 decode_wall=%.1f s handoff_wall=%.1f s batches=%zu | ms1 decode_wall=%.1f s handoff_wall=%.1f s\n", decode, handoff, batches, ms1_decode, ms1_handoff); } } g_perf_load; }
+ #include <opentims++/scan2inv_ion_mobility_converter.h>
+ #include <OpenMS/FORMAT/RationalScan2ImConverter.h>
+ #include <SQLiteCpp/SQLiteCpp.h>
+@@ -921,6 +929,104 @@
+     }
+   }
+ 
++// [SpeXtract table-mz] License-free EXACT TOF->m/z from the TDF MzCalibration table.
++// The MODEL lives in SpeXtract's own repo (src/TdfMzCalibration.h, BSD-3, copied here by
++// scripts/sync_cluster.sh) so the shipped code is the code the C++ unit test exercises.
++// Fails CLOSED: an unsupported calibration (ModelType != 1, dC2 != 0, multi-row table) throws
++// rather than silently using the -5..-11 ppm chord. SPEXTRACT_ALLOW_CHORD_FALLBACK=1 opts back in.
++#include <sqlite3.h>
++#include <OpenMS/FORMAT/TdfMzCalibration.h>
++namespace {
++// File-local (never crosses a DSO boundary, unlike an inline header static): which m/z
++// calibration the last load used. Stamped onto the MSExperiment so it travels with the data.
++std::string g_mz_calibration = "unset";
++class TdfTableTof2MzConverter final : public Tof2MzConverter
++{
++  spextract::TdfMzCalibration cal_;
++  std::vector<double> frame_t1_;
++public:
++  explicit TdfTableTof2MzConverter(const std::string& d_dir)
++  {
++    const std::string tdf = d_dir + "/analysis.tdf";
++    sqlite3* db = nullptr;
++    if (sqlite3_open_v2(tdf.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK)
++    {
++      const std::string why = db ? sqlite3_errmsg(db) : "out of memory";
++      sqlite3_close(db);   // sqlite allocates the handle even on failure
++      throw std::runtime_error("TdfMzCalibration: cannot open " + tdf + ": " + why);
++    }
++    sqlite3_stmt* st = nullptr;
++    int nrows = 0;
++    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM MzCalibration", -1, &st, nullptr) == SQLITE_OK
++        && sqlite3_step(st) == SQLITE_ROW) nrows = sqlite3_column_int(st, 0);
++    sqlite3_finalize(st); st = nullptr;
++    if (nrows != 1)
++    { sqlite3_close(db); throw std::runtime_error("TdfMzCalibration: " + std::to_string(nrows) + " MzCalibration rows, expected exactly 1"); }
++    if (sqlite3_prepare_v2(db,
++          "SELECT ModelType, DigitizerTimebase, DigitizerDelay, C0, C1, C2, T1, dC1, dC2, C3, C4 "
++          "FROM MzCalibration LIMIT 1", -1, &st, nullptr) == SQLITE_OK
++        && sqlite3_step(st) == SQLITE_ROW)
++    {
++      for (int col = 0; col <= 10; ++col)
++      {
++        const int ct = sqlite3_column_type(st, col);
++        if (ct != SQLITE_INTEGER && ct != SQLITE_FLOAT)
++        { sqlite3_finalize(st); sqlite3_close(db);
++          throw std::runtime_error("TdfMzCalibration: MzCalibration column " + std::to_string(col)
++                                   + " is NULL or non-numeric"); }
++      }
++      cal_.model_type = sqlite3_column_int(st, 0);
++      cal_.digitizer_timebase = sqlite3_column_double(st, 1);
++      cal_.digitizer_delay = sqlite3_column_double(st, 2);
++      cal_.C0 = sqlite3_column_double(st, 3); cal_.C1 = sqlite3_column_double(st, 4);
++      cal_.C2 = sqlite3_column_double(st, 5); cal_.T1_ref = sqlite3_column_double(st, 6);
++      cal_.dC1 = sqlite3_column_double(st, 7); cal_.dC2 = sqlite3_column_double(st, 8);
++      cal_.C3 = sqlite3_column_double(st, 9);  cal_.C4 = sqlite3_column_double(st, 10);
++    }
++    sqlite3_finalize(st); st = nullptr;
++    if (!cal_.isSupported())
++    { const std::string why = cal_.unsupportedReason(); sqlite3_close(db); throw std::runtime_error("TdfMzCalibration: " + why); }
++    if (sqlite3_prepare_v2(db, "SELECT Id, T1 FROM Frames", -1, &st, nullptr) != SQLITE_OK)
++    { sqlite3_close(db); throw std::runtime_error("TdfMzCalibration: cannot read Frames.T1"); }
++    {
++      int rc;
++      while ((rc = sqlite3_step(st)) == SQLITE_ROW)
++      {
++        const size_t id = (size_t)sqlite3_column_int64(st, 0);
++        if (id > 100000000u)   // sparse/corrupt frame ids must not drive an unbounded resize
++        { sqlite3_finalize(st); sqlite3_close(db); throw std::runtime_error("TdfMzCalibration: implausible Frames.Id " + std::to_string(id)); }
++        if (id >= frame_t1_.size()) frame_t1_.resize(id + 1, cal_.T1_ref);
++        // A NULL T1 reads as 0.0 through sqlite3_column_double, which would silently apply the FULL
++        // dC1*T1_ref temperature correction (~250 ppm) instead of none. Fall back to the reference
++        // temperature (= no correction) rather than inventing one.
++        frame_t1_[id] = (sqlite3_column_type(st, 1) == SQLITE_NULL)
++                          ? cal_.T1_ref : sqlite3_column_double(st, 1);
++      }
++      if (rc != SQLITE_DONE)   // a partial read would silently leave frames at T1_ref
++      { sqlite3_finalize(st); sqlite3_close(db);
++        throw std::runtime_error("TdfMzCalibration: Frames.T1 read ended early (sqlite rc "
++                                 + std::to_string(rc) + ")"); }
++    }
++    sqlite3_finalize(st);
++    sqlite3_close(db);
++  }
++  // frame_id 0 is not a real Bruker frame (Frames.Id is 1-based); one pristine OpenMS DDA path
++  // converts with a hardcoded 0. Slot 0 therefore holds T1_ref by construction = no temperature
++  // correction (<=0.7 ppm on the files measured). Documented rather than incidental.
++  inline double b_(uint32_t frame_id) const
++  { return cal_.frameFactor(frame_id < frame_t1_.size() ? frame_t1_[frame_id] : cal_.T1_ref); }
++  void convert(uint32_t frame_id, double* mzs, const double* tofs, uint32_t size) override final
++  { const double b = b_(frame_id); for (uint32_t i = 0; i < size; ++i) mzs[i] = cal_.tofToMz(tofs[i], b); }
++  void convert(uint32_t frame_id, double* mzs, const uint32_t* tofs, uint32_t size) override final
++  { const double b = b_(frame_id); for (uint32_t i = 0; i < size; ++i) mzs[i] = cal_.tofToMz((double)tofs[i], b); }
++  void inverse_convert(uint32_t frame_id, uint32_t* tofs, const double* mzs, uint32_t size) override final
++  { const double b = b_(frame_id);
++    for (uint32_t i = 0; i < size; ++i) tofs[i] = (uint32_t)std::max(0.0, std::round(cal_.mzToTof(mzs[i], b))); }
++  std::string description() override final { return "TdfMzCalibration (ModelType 1 + temperature, exact)"; }
++};
++} // namespace
++
++
+   // =====================================================================
+   // Helper: open TimsDataHandle with tiered calibration strategy
+   // =====================================================================
+@@ -977,7 +1083,14 @@
+           handle->scan2inv_ion_mobility_converter =
+             BrukerScan2InvIonMobilityConverterFactory::instance(sdk_path)
+               .produce(*handle, pcs);
+-          OPENMS_LOG_INFO << "TIMS calibration: Bruker SDK"
++          // [SpeXtract sdk-mz] The SDK branch previously upgraded ONLY the ion-mobility converter,
++          // leaving m/z on the linear-in-sqrt two-point baseline -- measured -5..-11 ppm low across
++          // the acquisition range (median -8.3 ppm on identified peptides vs the vendor conversion).
++          // Swap the m/z converter too: tims_index_to_mz applies Bruker`s full per-frame calibration.
++          handle->tof2mz_converter =
++            BrukerTof2MzConverterFactory::instance(sdk_path).produce(*handle, pcs);
++          g_mz_calibration = "bruker_sdk";
++          OPENMS_LOG_INFO << "TIMS calibration: Bruker SDK (m/z + ion mobility)"
+                           << (pcs != NoPressureCompensation ? " (pressure_comp=on)" : "")
+                           << std::endl;
+           return handle;
+@@ -1000,6 +1113,39 @@
+       }
+     }
+ 
++    // 2b. [SpeXtract table-mz] EXACT license-free m/z from the MzCalibration table.
++    // Gated on strategy: an explicit LINEAR request must still get the linear chord (otherwise we
++    // silently override the user AND step 4 logs 'linear (GlobalMetadata)', which would be false).
++    // (Only where the SDK did not already install a vendor m/z converter -- that path returns early.)
++    if (strategy == Strategy::AUTO || strategy == Strategy::RATIONAL)
++    {
++    try
++    {
++      handle->tof2mz_converter = std::make_unique<TdfTableTof2MzConverter>(path_string);
++      g_mz_calibration = "tdf_table_modeltype1";
++      OPENMS_LOG_INFO << "TOF m/z calibration: TDF MzCalibration table model (exact, license-free)" << std::endl;
++    }
++    catch (const std::exception& e)
++    {
++      // FAIL CLOSED: the legacy chord is -5..-11 ppm wrong; emitting that silently is the defect
++      // this converter exists to remove, so an unusable calibration is an error, not a warning.
++      const char* allow_env = std::getenv("SPEXTRACT_ALLOW_CHORD_FALLBACK");
++      // Only an explicit "1" opts in: getenv() != nullptr would treat
++      // SPEXTRACT_ALLOW_CHORD_FALLBACK=0 (and "") as ENABLE, defeating the whole point.
++      if (allow_env == nullptr || std::string(allow_env) != "1")
++      {
++        throw Exception::FileNotReadable(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
++          String("exact TOF->m/z calibration unavailable (") + e.what() +
++          "). The legacy linear-in-sqrt fallback is -5..-11 ppm biased; set "
++          "SPEXTRACT_ALLOW_CHORD_FALLBACK=1 to use it anyway.");
++      }
++      g_mz_calibration = "legacy_chord_APPROXIMATE";
++      OPENMS_LOG_WARN << "TDF table m/z model unavailable (" << e.what()
++                      << "); SPEXTRACT_ALLOW_CHORD_FALLBACK=1 -> linear-in-sqrt approximation"
++                      << " (-5..-11 ppm bias)" << std::endl;
++    }
++    }  // end strategy gate
++
+     // 3. Try rational model from TimsCalibration table (AUTO or RATIONAL)
+     if (strategy == Strategy::AUTO || strategy == Strategy::RATIONAL)
+     {
+@@ -1024,7 +1170,7 @@
+   // =====================================================================
+   // Helper: convert a single opentims frame to MSSpectrum
+   // =====================================================================
+-  static void frameToSpectrum(TimsFrame& frame, MSSpectrum& spec, int ms_level)
++  static void frameToSpectrum(TimsFrame& frame, MSSpectrum& spec, int ms_level, ZSTD_DCtx* ctx = nullptr)
+   {
+     spec.clear(true);
+     spec.setRT(frame.time);
+@@ -1044,7 +1190,7 @@
+     std::vector<double> inv_ion_mobilities(frame.num_peaks);
+ 
+     frame.save_to_buffs(nullptr, scan_ids.data(), nullptr, intensities.data(),
+-                        mzs.data(), inv_ion_mobilities.data(), nullptr);
++                        mzs.data(), inv_ion_mobilities.data(), nullptr, ctx);
+ 
+     // Fill spectrum peaks
+     spec.reserve(frame.num_peaks);
+@@ -1073,7 +1219,7 @@
+   // =====================================================================
+   static void centroidMS1Frame(TimsFrame& frame, MSSpectrum& spec,
+                                const BrukerTimsFile::Config& config,
+-                               FrameCentroider& centroider)
++                               FrameCentroider& centroider, ZSTD_DCtx* ctx = nullptr)
+   {
+     spec.clear(true);
+     spec.setRT(frame.time);
+@@ -1090,7 +1236,7 @@
+     std::vector<double> inv_ion_mobilities(frame.num_peaks);
+ 
+     frame.save_to_buffs(nullptr, nullptr, nullptr, intensities.data(),
+-                        mzs.data(), inv_ion_mobilities.data(), nullptr);
++                        mzs.data(), inv_ion_mobilities.data(), nullptr, ctx);
+ 
+     // Run centroiding
+     centroider.loadFrame(mzs.data(), intensities.data(), inv_ion_mobilities.data(), frame.num_peaks);
+@@ -1124,12 +1270,12 @@
+   // =====================================================================
+   static void loadMS1Spectrum(TimsFrame& frame, MSSpectrum& spec,
+                               const BrukerTimsFile::Config& config,
+-                              FrameCentroider& centroider)
++                              FrameCentroider& centroider, ZSTD_DCtx* ctx = nullptr)
+   {
+     if (isCentroidingEnabled(config))
+-      centroidMS1Frame(frame, spec, config, centroider);
++      centroidMS1Frame(frame, spec, config, centroider, ctx);
+     else
+-      frameToSpectrum(frame, spec, 1);
++      frameToSpectrum(frame, spec, 1, ctx);
+   }
+ 
+   // =====================================================================
+@@ -1396,29 +1542,74 @@
+ 
+     const size_t ms1_to_emit = config.load_ms1 ? ms1_frame_ids.size() : 0;
+     startProgress(0, ms1_to_emit, "Streaming DIA-PASEF MS1 frames");
+-    for (size_t i = 0; i < ms1_to_emit; ++i)
++    if (config.ms1_n_neighbors > 0)
+     {
+-      MSSpectrum spec;
+-      if (config.ms1_n_neighbors > 0)
++      for (size_t i = 0; i < ms1_to_emit; ++i)
+       {
++        MSSpectrum spec;
+         loadAggregatedMS1Spectrum(*handle, ms1_frame_ids, i, config,
+                                   ms1_aggregator, centroider, spec);
++        spec.sortByPosition();
++        consumer.consumeSpectrum(spec);
++        setProgress(i);
+       }
+-      else
++    }
++    else
++    {
++      // [SpeXtract ms1-par] MS1 is 4% of the frames but 37% of the peaks; decoding + building it
++      // serially was ~425 s of LOAD (MS2 decode: 4 s). Same recipe as the MS2 block below.
++      const size_t mb = 64;
++      static const bool par_ok_ms1 = (g_mz_calibration.find("sdk") == std::string::npos)
++                                     || std::getenv("SPEXTRACT_SDK_PARALLEL") != nullptr;
++      int nthr = 1;
++#ifdef _OPENMP
++      nthr = std::max(1, omp_get_max_threads());
++#endif
++      std::vector<FrameCentroider> cents((size_t)nthr);
++      for (size_t b0 = 0; b0 < ms1_to_emit; b0 += mb)
++      {
++        const size_t b1 = std::min(ms1_to_emit, b0 + mb);
++        const int n = (int)(b1 - b0);
++        std::vector<MSSpectrum> out((size_t)n);
++        std::exception_ptr ms1_err;
++        const auto _m0 = std::chrono::steady_clock::now();
++        #pragma omp parallel for schedule(dynamic, 1) if(par_ok_ms1)
++        for (int k = 0; k < n; ++k)
++        {
++          try
++          {
++            static thread_local std::unique_ptr<ZSTD_DCtx, size_t(*)(ZSTD_DCtx*)> tl_ctx(ZSTD_createDCtx(), &ZSTD_freeDCtx);
++            static thread_local std::vector<char> tl_buf;
++            int tid = 0;
++#ifdef _OPENMP
++            tid = omp_get_thread_num();
++#endif
++            TimsFrame& frame = handle->get_frame(ms1_frame_ids[b0 + (size_t)k]);
++            const size_t need = frame.data_size_bytes();
++            if (tl_buf.size() < need) tl_buf.resize(need);
++            frame.decompress(tl_buf.data(), tl_ctx.get());
++            loadMS1Spectrum(frame, out[(size_t)k], config, cents[(size_t)tid], tl_ctx.get());
++            frame.close();
++            out[(size_t)k].sortByPosition();
++          }
++          catch (...)
++          {
++            #pragma omp critical(ms1_err)
++            if (!ms1_err) ms1_err = std::current_exception();
++          }
++        }
++        if (ms1_err) std::rethrow_exception(ms1_err);
++        const auto _m1 = std::chrono::steady_clock::now();
++        for (int k = 0; k < n; ++k) consumer.consumeSpectrum(out[(size_t)k]);
++        setProgress(b1 - 1);
++        g_perf_load.ms1_decode += std::chrono::duration<double>(_m1 - _m0).count();
++        g_perf_load.ms1_handoff += std::chrono::duration<double>(std::chrono::steady_clock::now() - _m1).count();
++      }
++      for (const auto& c : cents)
+       {
+-        TimsFrame& frame = handle->get_frame(ms1_frame_ids[i]);
+-        loadMS1Spectrum(frame, spec, config, centroider);
++        centroider.cap_hits_ += c.cap_hits_; centroider.total_calls_ += c.total_calls_;
++        centroider.max_dropped_intensity_ = std::max(centroider.max_dropped_intensity_, c.max_dropped_intensity_);
+       }
+-      // Sort peaks by m/z (and the associated IM float data array alongside).
+-      // TIMS save_to_buffs returns peaks in (scan_id, m/z-within-scan) order,
+-      // which is NOT globally m/z-sorted. Downstream consumers
+-      // (OpenSwath's chromatogram extraction) assume sorted m/z for lower_bound /
+-      // upper_bound range queries; without this sort, queries silently miss
+-      // peaks, producing empty chromatograms and breaking iRT calibration.
+-      // The non-streaming load() path gets this sort for free via exp.sortSpectra(true).
+-      spec.sortByPosition();
+-      consumer.consumeSpectrum(spec);
+-      setProgress(i);
+     }
+     endProgress();
+     centroider.reportCapSummary(static_cast<size_t>(config.ms1_centroid_max_peaks));
+@@ -1448,71 +1639,124 @@
+     startProgress(0, total_work, "Streaming DIA-PASEF MS2 frames");
+     Size progress_count = 0;
+ 
++    // [SpeXtract par-load] FRAME-MAJOR, PARALLEL, DECODE-ONCE.
++    //
++    // The original loop was window-major: for each window of a group, for each frame, decode the
++    // frame. In diaPASEF every group has several windows (2 on the files measured), so each
++    // physical MS2 frame was zstd-decompressed and TOF->m/z-converted once PER WINDOW -- a 2x
++    // re-decode of the whole run -- and all of it on one thread (measured: the serial load was
++    // 53% of a 33-minute extraction). Now each frame is decoded exactly once and sliced into all
++    // of its group's windows, and a batch of frames is decoded in parallel with the per-thread
++    // ZSTD_DCtx + decompression buffer that opentims documents as the thread-safe pattern (and
++    // uses itself). Spectra are handed to the consumer serially in (frame, window) order, so a
++    // consumer that routes by window sees each window's frames in the same ascending order as
++    // before: the compact store, and hence the output, is unchanged.
++    // Batch size via SPEXTRACT_LOAD_BATCH (default 256): ponytail -- an env var until a
++    // measurement says it deserves a Config field.
++    size_t batch = 256;
++    if (const char* e = std::getenv("SPEXTRACT_LOAD_BATCH")) { const long v = std::atol(e); if (v > 0) batch = (size_t)v; }
++
+     for (const auto& [group, frame_ids] : group_to_frames)
+     {
+       auto wit = group_to_windows.find(group);
+       if (wit == group_to_windows.end()) continue;
+-      const auto& dia_windows = wit->second;
++      const auto& dia_windows = wit->second;   // windows of this group, in table order
+ 
+-      for (const DIAWindow* win : dia_windows)
++      for (size_t b0 = 0; b0 < frame_ids.size(); b0 += batch)
+       {
+-        for (size_t i = 0; i < frame_ids.size(); ++i)
++        const size_t b1 = std::min(frame_ids.size(), b0 + batch);
++        const int n = (int)(b1 - b0);
++        // per frame slot: one spectrum per window of the group (empty = skipped)
++        std::vector<std::vector<MSSpectrum>> out((size_t)n);
++
++        // chunk 1: chunk 4 over a 256-frame batch made 64 chunks = 64 workers (codex, plan review).
++        // The vendor SDK converter's thread-safety is not vouched for here -> serial unless opted in.
++        static const bool par_ok = (g_mz_calibration.find("sdk") == std::string::npos)
++                                   || std::getenv("SPEXTRACT_SDK_PARALLEL") != nullptr;
++        const auto _t0 = std::chrono::steady_clock::now();
++        std::exception_ptr load_err;
++        #pragma omp parallel for schedule(dynamic, 1) if(par_ok)
++        for (int k = 0; k < n; ++k)
+         {
+-          setProgress(progress_count++);
+-          TimsFrame& frame = handle->get_frame(frame_ids[i]);
++          try
++          {
++          // thread-local decode state: the ONLY reason opentims is not thread-safe is the shared
++          // buffer + shared ZSTD_DCtx in the handle; passing our own removes it.
++          static thread_local std::unique_ptr<ZSTD_DCtx, size_t(*)(ZSTD_DCtx*)> tl_ctx(ZSTD_createDCtx(), &ZSTD_freeDCtx);
++          static thread_local std::vector<char> tl_buf;
++
++          TimsFrame& frame = handle->get_frame(frame_ids[b0 + (size_t)k]);
+           if (frame.num_peaks == 0) continue;
++          const size_t need = frame.data_size_bytes();
++          if (tl_buf.size() < need) tl_buf.resize(need);
++          frame.decompress(tl_buf.data(), tl_ctx.get());
+ 
+           std::vector<uint32_t> scan_ids(frame.num_peaks);
+           std::vector<uint32_t> intensities(frame.num_peaks);
+           std::vector<double> mzs(frame.num_peaks);
+           std::vector<double> inv_ion_mobilities(frame.num_peaks);
+-
+           frame.save_to_buffs(nullptr, scan_ids.data(), nullptr, intensities.data(),
+-                              mzs.data(), inv_ion_mobilities.data(), nullptr);
+-
+-          MSSpectrum spec;
+-          spec.setRT(frame.time);
+-          spec.setMSLevel(2);
+-          spec.setDriftTimeUnit(DriftTimeUnit::VSSC);
+-          spec.setType(SpectrumSettings::SpectrumType::CENTROID);
+-          spec.setNativeID("frame=" + String(frame.id) + " windowGroup=" + String(win->window_group) + " scan=" + String(win->scan_begin));
+-
+-          Precursor prec;
+-          prec.setMZ(win->mz_center);
+-          prec.setIsolationWindowLowerOffset(win->mz_width / 2.0);
+-          prec.setIsolationWindowUpperOffset(win->mz_width / 2.0);
+-          spec.setPrecursors({prec});
++                              mzs.data(), inv_ion_mobilities.data(), nullptr, tl_ctx.get());
++          frame.close();                                    // releases the frame's view of OUR buffer
+ 
+-          spec.setMetaValue("ion mobility lower limit", win->im_lower);
+-          spec.setMetaValue("ion mobility upper limit", win->im_upper);
+-
+-          DataArrays::FloatDataArray im_array;
+-          IMDataConverter::setIMUnit(im_array, DriftTimeUnit::VSSC);
+-
+-          for (uint32_t p = 0; p < frame.num_peaks; ++p)
++          auto& slot = out[(size_t)k];
++          slot.reserve(dia_windows.size());
++          for (const DIAWindow* win : dia_windows)
+           {
+-            if (inv_ion_mobilities[p] >= win->im_lower && inv_ion_mobilities[p] <= win->im_upper)
++            MSSpectrum spec;
++            spec.setRT(frame.time);
++            spec.setMSLevel(2);
++            spec.setDriftTimeUnit(DriftTimeUnit::VSSC);
++            spec.setType(SpectrumSettings::SpectrumType::CENTROID);
++            spec.setNativeID("frame=" + String(frame.id) + " windowGroup=" + String(win->window_group) + " scan=" + String(win->scan_begin));
++
++            Precursor prec;
++            prec.setMZ(win->mz_center);
++            prec.setIsolationWindowLowerOffset(win->mz_width / 2.0);
++            prec.setIsolationWindowUpperOffset(win->mz_width / 2.0);
++            spec.setPrecursors({prec});
++            spec.setMetaValue("ion mobility lower limit", win->im_lower);
++            spec.setMetaValue("ion mobility upper limit", win->im_upper);
++
++            DataArrays::FloatDataArray im_array;
++            IMDataConverter::setIMUnit(im_array, DriftTimeUnit::VSSC);
++            for (uint32_t pk = 0; pk < frame.num_peaks; ++pk)
++            {
++              if (inv_ion_mobilities[pk] >= win->im_lower && inv_ion_mobilities[pk] <= win->im_upper)
++              {
++                Peak1D peak;
++                peak.setMZ(mzs[pk]);
++                peak.setIntensity(static_cast<double>(intensities[pk]));
++                spec.push_back(peak);
++                im_array.push_back(static_cast<float>(inv_ion_mobilities[pk]));
++              }
++            }
++            if (!spec.empty())
+             {
+-              Peak1D peak;
+-              peak.setMZ(mzs[p]);
+-              peak.setIntensity(static_cast<double>(intensities[p]));
+-              spec.push_back(peak);
+-              im_array.push_back(static_cast<float>(inv_ion_mobilities[p]));
++              spec.getFloatDataArrays().push_back(std::move(im_array));
++              spec.setIMPeakType(IMPeakType::IM_PROFILE);
++              spec.sortByPosition();   // TIMS order is (scan, m/z-within-scan); consumers assume global m/z order
+             }
++            slot.push_back(std::move(spec));   // keep the slot (possibly empty spectrum) to preserve window index
+           }
+-
+-          if (!spec.empty())
++          }
++          catch (...)
+           {
+-            spec.getFloatDataArrays().push_back(std::move(im_array));
+-            spec.setIMPeakType(IMPeakType::IM_PROFILE);
+-            // Sort peaks by m/z (and the IM float data array alongside).
+-            // See the matching comment in the MS1 loop above — TIMS save_to_buffs
+-            // returns peaks in (scan_id, m/z-within-scan) order; OpenSwath's
+-            // chromatogram extraction assumes globally m/z-sorted input.
+-            spec.sortByPosition();
+-            consumer.consumeSpectrum(spec);
++            #pragma omp critical(load_err)
++            if (!load_err) load_err = std::current_exception();
+           }
+         }
++        if (load_err) std::rethrow_exception(load_err);
++        const auto _t1 = std::chrono::steady_clock::now();
++
++        // serial hand-off in (frame, window) order -- the consumer is not thread-safe
++        for (int k = 0; k < n; ++k)
++          for (auto& spec : out[(size_t)k])
++            if (!spec.empty()) consumer.consumeSpectrum(spec);
++        progress_count += (Size)n * dia_windows.size();
++        setProgress(progress_count);
++        { const auto _t2 = std::chrono::steady_clock::now(); g_perf_load.decode += std::chrono::duration<double>(_t1 - _t0).count();
++          g_perf_load.handoff += std::chrono::duration<double>(_t2 - _t1).count(); ++g_perf_load.batches; }
+       }
+     }
+     endProgress();
+@@ -1526,9 +1770,12 @@
+     load(path, exp, Config());
+   }
+ 
++  const std::string& BrukerTimsFile::lastMzCalibration() { return g_mz_calibration; }
++
+   void BrukerTimsFile::load(const String& path, MSExperiment& exp, const Config& config)
+   {
+     exp.clear(true);
++    g_mz_calibration = "unset";   // never report a stale value from a previous file
+     auto handle = openTimsDataHandle(path, config);
+ 
+     String tdf_path = path + "/analysis.tdf";
+@@ -1551,6 +1798,7 @@
+     loadExperimentalSettings_(path, exp);
+ 
+     // Sort by RT, interleaved across MS levels
++    exp.setMetaValue("spx:mz_calibration", g_mz_calibration);   // [provenance] travels with the data
+     exp.sortSpectra(true);
+     exp.updateRanges();
+   }
+--- src/openms/source/PROCESSING/CENTROIDING/PeakPickerIM.cpp
++++ src/openms/source/PROCESSING/CENTROIDING/PeakPickerIM.cpp
+@@ -698,6 +698,8 @@
+       // --- PickIMCluster parameters ---
+       defaults_.setValue("pickIMCluster:ppm_tolerance_cluster", 50.0, "m/z tolerance in ppm for clustering");
+       defaults_.setValue("pickIMCluster:im_tolerance_cluster", 0.1, "Ion mobility tolerance for clustering (in 1/K0 units). For CCS data, use larger values (e.g., 10-20).");
++      defaults_.setValue("pickIMCluster:mz_mode", "weighted", "[SpeXtract pick-mz] reported m/z of a cluster: weighted (intensity-weighted mean, default) | seed (most intense point) | top3 (weighted mean of the 3 most intense points)");
++      defaults_.setValidStrings("pickIMCluster:mz_mode", {"weighted", "seed", "top3"});
+       // --- PickIMElutionProfiles parameters ---
+       defaults_.setValue("pickIMElutionProfiles:ppm_tolerance_elution", 50.0, "Mass trace m/z tolerance in ppm");
+ 
+@@ -714,6 +716,7 @@
+ 
+       ppm_tolerance_cluster_ = (double)param_.getValue("pickIMCluster:ppm_tolerance_cluster");
+       im_tolerance_cluster_ = (double)param_.getValue("pickIMCluster:im_tolerance_cluster");
++      mz_mode_ = param_.getValue("pickIMCluster:mz_mode").toString();   // [SpeXtract pick-mz]
+ 
+       ppm_tolerance_elution_ = (double)param_.getValue("pickIMElutionProfiles:ppm_tolerance_elution");
+ 
+@@ -1184,8 +1187,19 @@
+           }
+ 
+           if (sum_intensity > std::numeric_limits<double>::epsilon()) {
++            double out_mz = sum_mz_intensity / sum_intensity;   // [SpeXtract pick-mz]
++            if (mz_mode_ == "seed") out_mz = points[seed_original_idx].mz;
++            else if (mz_mode_ == "top3")
++            {
++              std::vector<OpenMS::Size> byi(current_cluster_indices.begin(), current_cluster_indices.end());
++              std::partial_sort(byi.begin(), byi.begin() + std::min<size_t>(3, byi.size()), byi.end(),
++                                [&](OpenMS::Size x, OpenMS::Size y) { return points[x].intensity > points[y].intensity; });
++              double s3 = 0, m3 = 0;
++              for (size_t k = 0; k < std::min<size_t>(3, byi.size()); ++k) { s3 += points[byi[k]].intensity; m3 += points[byi[k]].mz * points[byi[k]].intensity; }
++              if (s3 > 0) out_mz = m3 / s3;
++            }
+             averaged_points.emplace_back(
+-              sum_mz_intensity / sum_intensity,
++              out_mz,
+               sum_im_intensity / sum_intensity,
+               static_cast<float>(sum_intensity),
+               0 // Original index is meaningless for averaged points
+--- src/openms/include/OpenMS/FORMAT/BrukerTimsFile.h
++++ src/openms/include/OpenMS/FORMAT/BrukerTimsFile.h
+@@ -125,6 +125,7 @@
+     /// Exported from libOpenMS on purpose: a header-inline static would be duplicated across the
+     /// DSO boundary (OpenMS builds with hidden visibility), so the caller would read its own copy
+     /// and always see "unset". Covers BOTH the load() and the streaming paths.
++    static const std::string& lastMzCalibration();
+ 
+     void load(const String& path, MSExperiment& exp);
+     /// @overload with explicit configuration

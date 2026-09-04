@@ -1,0 +1,32 @@
+title: "#1 corrected: de-chimerize the top-150 peaks (co-isolation lever), not fragment count"
+# The linkage diagnosis killed the original #1 (raise max_fragments): 70-75% of spectra already
+# hit the 500-peak cap and Sage reads only the top-150 by intensity, so more fragments = more
+# noise, never more IDs. The live question the diagnosis surfaced instead: are those top-150
+# peaks polluted by fragments that belong to a CO-ISOLATED precursor? assembly:rp_max=1 keeps
+# each fragment in only its single best-correlating precursor (strict de-chimerization). If IDs
+# rise, cross-precursor sharing was the gap; if they fall, redundancy is load-bearing (which is
+# what open_bench.py pre-registered) and de-chimerization is another falsified lever.
+samples: [dataset D]
+binary: /path/to/scratch/OpenMS/build/bin/spextract
+threads: 100
+arms:
+  - name: base
+    # the shipped-default invocation (some of these are NOT binary defaults, e.g.
+    # ms2_noise_threshold_int code-default is 100 but the baseline runs it at 10)
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+  - name: rpmax1
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      assembly:rp_max: 1

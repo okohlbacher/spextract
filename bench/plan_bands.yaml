@@ -1,0 +1,31 @@
+title: "topology sweep: does running more windows concurrently (fewer bands) cut WALL time?"
+# rt1 showed the EPD system-time (37%) was a red herring for wall -- after fixing it the tool uses
+# ~39 of 100 cores, wall unchanged. The wall ceiling is the n_conc=8 topology. n_conc = threads /
+# trace_bands, so this sweep tests the thread-budget split WITHOUT the risky task-graph rewrite:
+#   trace_bands 12 -> n_conc  8 (current default)
+#   trace_bands  8 -> n_conc 12
+#   trace_bands  6 -> n_conc 16
+#   trace_bands  4 -> n_conc 24 (all windows concurrent)
+# Fewer bands = more concurrent windows (better phase-skew averaging, shorter tail) BUT more total
+# trace CPU (banding reduces trace work superlinearly). The earlier "12 beats 24 bands" was measured
+# under the OLD contention-ridden EPD; with EPD fixed the balance may have moved.
+#
+# Pre-registered: the metric is WALL TIME at NO peptide regression (peptides must stay within the
+# 0.34% replicate band of ~10,120; a config that trades peptides for speed is not a win). RAM: 24
+# concurrent windows may hit the admission throttle (~13 GB/window x 24 ~ 300 GB of ~1 TB) -- watch
+# that n_conc actually reaches the target and is not throttled below it.
+samples: [dataset D]
+binary: /path/to/scratch/OpenMS/build/bin/spextract
+threads: 100
+arms:
+  - name: b12
+    params: {trace:ms2_chrom_peak_snr: 1.0, trace:ms2_noise_threshold_int: 10, trace:ms2_min_length_sec: 0, trace:ms2_split_valleys: 7.0, trace:ms1_split_valleys: 7.0, charge:scoring: count, perf:trace_bands: 12}
+  - name: b8
+    baseline: b12
+    params: {trace:ms2_chrom_peak_snr: 1.0, trace:ms2_noise_threshold_int: 10, trace:ms2_min_length_sec: 0, trace:ms2_split_valleys: 7.0, trace:ms1_split_valleys: 7.0, charge:scoring: count, perf:trace_bands: 8}
+  - name: b6
+    baseline: b12
+    params: {trace:ms2_chrom_peak_snr: 1.0, trace:ms2_noise_threshold_int: 10, trace:ms2_min_length_sec: 0, trace:ms2_split_valleys: 7.0, trace:ms1_split_valleys: 7.0, charge:scoring: count, perf:trace_bands: 6}
+  - name: b4
+    baseline: b12
+    params: {trace:ms2_chrom_peak_snr: 1.0, trace:ms2_noise_threshold_int: 10, trace:ms2_min_length_sec: 0, trace:ms2_split_valleys: 7.0, trace:ms1_split_valleys: 7.0, charge:scoring: count, perf:trace_bands: 4}

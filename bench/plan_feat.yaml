@@ -1,0 +1,85 @@
+title: "wavelet precursor smoothing + intensity ranking, vs shipped defaults"
+# Both arms come from the literature cross-check against the reference implementation (Nat Commun 16:95), not from
+# parameter search -- which matters, because parameter search on this file already produced one
+# retracted result (the min_correlation "+7.7%" was an FDR recalibration artefact).
+#
+#  wl025 / wl050  trace:wavelet_smooth = 0.25 / 0.50 x the MEASURED MS1 FWHM (3.61 s on dataset D, so
+#                 0.9 s and 1.8 s). the reference implementation smooths its precursor XIC and THEN thresholds at
+#                 0.3; we copied the 0.3 without the smoothing, and Pearson r between two noisy
+#                 profiles is attenuated toward 0 as S/N falls -- worst at the faint precursors
+#                 the coverage analysis says we lose. Two points, not one, because a single point
+#                 cannot distinguish "smoothing helps" from "this particular width helps".
+#  rankint        assembly:rank_by = intensity, as the reference implementation ranks its top-500. The engine
+#                 re-ranks by INTENSITY downstream (Sage max_peaks=150), so a correlation-ranked
+#                 cap can discard peaks the engine would have scored. 70-75% of spectra sit at
+#                 the cap, so it bites on most spectra.
+#
+# PRE-REGISTERED, and this time the honest axis is stated UP FRONT: peptides at peptide_q<=0.01
+# is a NOMINAL, per-run-calibrated number and it has already fooled this project once. No arm is
+# adopted on the q-based count alone. A winner must ALSO (a) hold at a fixed cross-arm
+# discriminant threshold (bench/fdrcheck.py) and (b) not raise the entrapment error rate
+# (bench/entrapment.py). Failing either, it is recorded as another falsified lever.
+samples: [dataset D]
+binary: /path/to/scratch/OpenMS/build/bin/spextract
+threads: 100
+arms:
+  - name: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+  - name: wl025
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      trace:wavelet_smooth: 0.25
+  - name: wl050
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      trace:wavelet_smooth: 0.50
+  - name: rankint
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      assembly:rank_by: intensity
+  # The experiment that was IMPOSSIBLE before perf:ms1_trace_bands: lowering the MS1 floor.
+  # The literature names MS1-detectability as the root cause of low-abundance loss for this whole
+  # tool class ("a pseudospectrum is created only if a peptide generates detectable signal in the
+  # MS1 data" -- DIA-Umpire lineage). Previously this arm ran 40 min at 1.5/128 cores with zero
+  # progress; with banding the same phase now sustains ~880% CPU. Paired with base in ONE
+  # invocation so the earlier orphaned attempt's FAILURE-2 problem does not recur.
+  - name: ms1sens
+    baseline: base
+    params:
+      trace:ms2_chrom_peak_snr: 1.0
+      trace:ms2_noise_threshold_int: 10
+      trace:ms2_min_length_sec: 0
+      trace:ms2_split_valleys: 7.0
+      trace:ms1_split_valleys: 7.0
+      charge:scoring: count
+      perf:trace_bands: 12
+      trace:noise_threshold_int: 10
+      trace:ms1_chrom_peak_snr: 1.0

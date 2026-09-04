@@ -1,0 +1,47 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  # Everything here runs WITHOUT OpenMS, so it can run on every platform on every push.
+  # The calibration model is the code that actually ships: it is a self-contained header, and
+  # compiling it under GCC, AppleClang and MSVC is what catches the portability bugs a
+  # single-platform build never sees.
+  portability:
+    name: ${{ matrix.os }} (${{ matrix.cc }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  cc: gcc }
+          - { os: ubuntu-22.04,   cc: gcc-11 }
+          - { os: macos-latest,   cc: appleclang-arm64 }
+          - { os: macos-13,       cc: appleclang-x86_64 }
+          - { os: windows-latest, cc: msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Configure and build the OpenMS-independent targets
+        run: cmake -B build -DSPEXTRACT_TESTS_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Calibration golden test (the C++ that ships)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Calibration golden test (Python reference implementation)
+        run: python3 tests/test_calibration.py
+
+      - name: Entrapment estimator self-check
+        run: python3 tests/test_entrapment.py
+
+      - name: Analysis and test scripts parse cleanly
+        run: >
+          python3 -m py_compile
+          bench/entrapment.py bench/entrap_apply.py bench/open_ptm_score.py
+          bench/collapse_sim.py bench/semantic_digest.py test/test_spextract.py
