@@ -1,4 +1,18 @@
-# SpeXtract
+<p align="center">
+  <img src="assets/logo.svg" alt="SpeXtract" width="132">
+</p>
+
+<h1 align="center">SpeXtract</h1>
+
+<p align="center">
+  <em>Pseudo-DDA spectra from Bruker timsTOF diaPASEF data, for open and blind searching.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/okohlbacher/spextract/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/okohlbacher/spextract/actions/workflows/tests.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-BSD--3--Clause-blue.svg"></a>
+  <a href="https://github.com/okohlbacher/spextract/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/okohlbacher/spextract"></a>
+</p>
 
 Extract pseudo-DDA ("pseudo-MS/MS") spectra from Bruker timsTOF **diaPASEF** data.
 
