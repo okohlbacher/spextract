@@ -4038,7 +4038,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
 #else
     // Built without mzPeak support: mzML is the only container this binary can write. Refuse an
     // explicit request for mzPeak rather than silently writing something else.
-    if (!out_type_opt.empty() && out_type_opt.toLower() != "mzml")
+    String out_type_lc = out_type_opt; out_type_lc.toLower();          // toLower() mutates
+    if (!out_type_lc.empty() && out_type_lc != "mzml")
       throw OpenMS::Exception::InvalidParameter(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
             "-out_type mzpeak needs a build with mzPeak support (-DMZPEAK_ROOT=...); this binary "
             "can only write mzML.");
