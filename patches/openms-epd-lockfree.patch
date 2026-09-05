@@ -1,68 +1,92 @@
-# OpenMS ElutionPeakDetection made LOCK-FREE for SpeXtract's nested band-parallel calls.
-# Removes the program-global critical OPENMS_ElutionPeakDetection_mtraces (per-thread accumulation
-# in detectPeaks(vector); serial nested path into the caller's own vector). Combined with the
-# ms1_traces canonical sort in spextract (determinism fix), the whole tool is now
-# bit-deterministic: verified 1,528,113 spectra / 10,036 peptides IDENTICAL on node-1 and node-2
-# (different thread scheduling). Supersedes openms-epd-no-nested-parallel.patch.
-328,330c328,334
-< #pragma omp parallel for
-< #endif
-<     for (SignedSize i = 0; i < (SignedSize) mt_vec.size(); ++i)
----
->     // [SpeXtract lock-free] The push_back below used a PROGRAM-GLOBAL named critical. Called from
->     // inside another parallel region (SpeXtract's per-band trace loop, 96 concurrent callers) that
->     // one lock serialised everything -> 195M context switches, 37% system time. Fix: at TOP LEVEL,
->     // collect into per-thread buffers and merge (no shared vector, no lock); when already NESTED,
->     // run serially into the caller's own vector (also no sharing). detectElutionPeaks_ no longer
->     // takes the critical, which is now safe because no output vector is ever shared across threads.
->     if (!omp_in_parallel())
-332,334c336,341
-<       IF_MASTERTHREAD this->setProgress(progress);
-< 
-< #ifdef _OPENMP
----
->       const int nthreads = omp_get_max_threads();
->       std::vector<std::vector<MassTrace> > local(nthreads > 0 ? nthreads : 1);
-> #pragma omp parallel for
->       for (SignedSize i = 0; i < (SignedSize) mt_vec.size(); ++i)
->       {
->         IF_MASTERTHREAD this->setProgress(progress);
-335a343,351
->         ++progress;
->         detectElutionPeaks_(mt_vec[i], local[omp_get_thread_num()]);
->       }
->       for (Size t = 0; t < local.size(); ++t)
->         for (Size k = 0; k < local[t].size(); ++k)
->           single_mtraces.push_back(std::move(local[t][k]));
->       this->endProgress();
->       return;
->     }
-337,339c353
-<       ++progress;
-< 
-<       // push_back to 'single_mtraces' is protected, so threading is ok
----
->     for (SignedSize i = 0; i < (SignedSize) mt_vec.size(); ++i)
-341,342d354
-<     }
-< 
-344d355
-< 
-459,464c470
-< #ifdef _OPENMP
-< #pragma omp critical (OPENMS_ElutionPeakDetection_mtraces)
-< #endif
-<         {
-<           single_mtraces.push_back(mt);
-<         }
----
->         single_mtraces.push_back(mt);   // [SpeXtract] lock-free: vector is thread-private
-544,549c550
-< #ifdef _OPENMP
-< #pragma omp critical (OPENMS_ElutionPeakDetection_mtraces)
-< #endif
-<           {
-<             single_mtraces.push_back(new_mt);
-<           }
----
->             single_mtraces.push_back(new_mt);   // [SpeXtract] lock-free: vector is thread-private
+# SpeXtract: make OpenMS ElutionPeakDetection lock-free for nested parallel callers.
+#
+# detectPeaks(vector) guarded a shared output vector with a PROGRAM-GLOBAL named critical. Called
+# from inside SpeXtract's per-band trace loop (96 concurrent callers) that one lock serialised the
+# whole tool: 195M context switches, 37% system time. At top level this now collects into
+# per-thread buffers and merges; when already nested it runs serially into the caller's own vector.
+# No output vector is ever shared across threads, so the critical is unnecessary. Numerically
+# identical: verified 1,528,113 spectra / 10,036 peptides identical across two machines.
+#
+# Base: OpenMS/OpenMS develop bd4b89555629d68b431b189a4c841efbcc4dfeea (2026-04-24).
+# Regenerated 2026-09-05 as a UNIFIED diff. The previous version was a headerless NORMAL diff
+# ("328,330c328,334") naming no file at all, so `patch` could not know what to modify and ignored
+# every hunk -- which is why the CI build failed at the patch step.
+# Apply with: patch -p1 -d <OpenMS tree> < this file
+--- a/src/openms/source/FEATUREFINDER/ElutionPeakDetection.cpp
++++ b/src/openms/source/FEATUREFINDER/ElutionPeakDetection.cpp
+@@ -325,23 +325,34 @@
+     this->startProgress(0, mt_vec.size(), "elution peak detection");
+     Size progress(0);
+ #ifdef _OPENMP
+-#pragma omp parallel for
+-#endif
+-    for (SignedSize i = 0; i < (SignedSize) mt_vec.size(); ++i)
+-    {
+-      IF_MASTERTHREAD this->setProgress(progress);
+-
+-#ifdef _OPENMP
++    // [speXtract lock-free] The push_back below used a PROGRAM-GLOBAL named critical. Called from
++    // inside another parallel region (speXtract's per-band trace loop, 96 concurrent callers) that
++    // one lock serialised everything -> 195M context switches, 37% system time. Fix: at TOP LEVEL,
++    // collect into per-thread buffers and merge (no shared vector, no lock); when already NESTED,
++    // run serially into the caller's own vector (also no sharing). detectElutionPeaks_ no longer
++    // takes the critical, which is now safe because no output vector is ever shared across threads.
++    if (!omp_in_parallel())
++    {
++      const int nthreads = omp_get_max_threads();
++      std::vector<std::vector<MassTrace> > local(nthreads > 0 ? nthreads : 1);
++#pragma omp parallel for
++      for (SignedSize i = 0; i < (SignedSize) mt_vec.size(); ++i)
++      {
++        IF_MASTERTHREAD this->setProgress(progress);
+ #pragma omp atomic
++        ++progress;
++        detectElutionPeaks_(mt_vec[i], local[omp_get_thread_num()]);
++      }
++      for (Size t = 0; t < local.size(); ++t)
++        for (Size k = 0; k < local[t].size(); ++k)
++          single_mtraces.push_back(std::move(local[t][k]));
++      this->endProgress();
++      return;
++    }
+ #endif
+-      ++progress;
+-
+-      // push_back to 'single_mtraces' is protected, so threading is ok
++    for (SignedSize i = 0; i < (SignedSize) mt_vec.size(); ++i)
+       detectElutionPeaks_(mt_vec[i], single_mtraces);
+-    }
+-
+     this->endProgress();
+-
+     return;
+   }
+ 
+@@ -456,12 +467,7 @@
+           mt.estimateFWHM(true);
+         }
+ 
+-#ifdef _OPENMP
+-#pragma omp critical (OPENMS_ElutionPeakDetection_mtraces)
+-#endif
+-        {
+-          single_mtraces.push_back(mt);
+-        }
++        single_mtraces.push_back(mt);   // [speXtract] lock-free: vector is thread-private
+ 
+       }
+     }
+@@ -541,12 +547,7 @@
+             new_mt.estimateFWHM(true);
+           }
+ 
+-#ifdef _OPENMP
+-#pragma omp critical (OPENMS_ElutionPeakDetection_mtraces)
+-#endif
+-          {
+-            single_mtraces.push_back(new_mt);
+-          }
++            single_mtraces.push_back(new_mt);   // [speXtract] lock-free: vector is thread-private
+         }
+       }
+     }

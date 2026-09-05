@@ -14,23 +14,18 @@ name: full build
 # It is deliberately NOT continue-on-error. A build job that is allowed to fail quietly is worse
 # than no build job: it reports green while the tool does not compile.
 
-# STATUS 2026-09-05: this workflow FAILS at the patch step, and the reason is a real defect in the
-# project rather than in the CI. The patches were cut against an OpenMS tree exported from a private
-# branch (the build tree records OPENMS_GIT_BRANCH=exported, and its pristine BrukerTimsFile.cpp
-# hashes to nothing on OpenMS/develop between 2026-05 and 2026-09). So there is currently NO public
-# OpenMS commit the patches apply to, which means nobody outside the group can build SpeXtract --
-# the external-reproducibility blocker, now with a named cause.
-#
-# The weekly schedule is disabled until the patches are rebased onto a public commit, because a
-# permanently red weekly build teaches everyone to ignore the badge. It still runs on demand, and it
-# is still NOT continue-on-error: when the rebase lands, this is what will prove it.
+# Builds OpenMS from source at the pinned commit in patches/openms.lock, applies the SpeXtract
+# patches, builds the tool and runs the end-to-end suite against the binary it just built. This is
+# the only job that proves the tool compiles, so it is deliberately NOT continue-on-error.
 on:
   workflow_dispatch:
     inputs:
       openms_ref:
-        description: 'OpenMS ref to build against (branch, tag or sha)'
+        description: 'OpenMS ref to build against (default: the pin in patches/openms.lock)'
         required: false
-        default: 'develop'
+        default: ''
+  schedule:
+    - cron: '0 4 * * 1'      # Mondays, 04:00 UTC
 
 jobs:
   linux:
@@ -57,13 +52,14 @@ jobs:
           max-size: 2G
 
       - name: Check out OpenMS
-        # Pinned, not `develop`: a moving base makes a patch failure indistinguishable from an
-        # upstream change. Override with the input once the patches are rebased.
-        env:
-          OPENMS_REF: ${{ github.event.inputs.openms_ref || 'develop' }}
+        # Pinned by default: a moving base makes a patch failure indistinguishable from an upstream
+        # change. Pass openms_ref to test against a newer commit deliberately.
         run: |
+          REF="${{ github.event.inputs.openms_ref }}"
+          [ -n "$REF" ] || REF=$(sed -n 's/^OPENMS_BASE=//p' spextract/patches/openms.lock)
+          echo "building against OpenMS $REF"
           git clone https://github.com/OpenMS/OpenMS.git
-          git -C OpenMS checkout "$OPENMS_REF"
+          git -C OpenMS checkout "$REF"
 
       - name: Apply the SpeXtract patches to OpenMS
         run: spextract/scripts/apply_openms_patches.sh "$GITHUB_WORKSPACE/OpenMS"

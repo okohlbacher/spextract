@@ -52,15 +52,18 @@ cmake -B build -DOpenMS_DIR=/path/to/OpenMS/build
 cmake --build build -j
 ```
 
+The OpenMS tree must be checked out at the commit named in `patches/openms.lock` before patching —
+the patches are cut against exactly that commit, and are verified to reproduce the benchmarked tree
+from it byte for byte:
+
+```bash
+git clone https://github.com/OpenMS/OpenMS.git
+git -C OpenMS checkout $(sed -n 's/^OPENMS_BASE=//p' patches/openms.lock)
+```
+
 The binary is `build/spextract`. `cmake --install build` puts it in `bin/`.
 
 ### OpenMS patches
-
-> **Known blocker (2026-09-05).** The patches below were cut against an OpenMS tree exported from a
-> private branch, and there is currently **no public OpenMS commit they apply to** — so a stranger
-> cannot yet build SpeXtract from this repository. Rebasing them onto a public commit is the top
-> open issue; until then the numbers here are reproducible only inside the originating group. This
-> is stated plainly rather than left for you to discover at the patch step.
 
 `scripts/apply_openms_patches.sh` installs `src/TdfMzCalibration.h` into the OpenMS tree and applies
 two patches. **Both matter, and the build will not tell you if they are missing:**
