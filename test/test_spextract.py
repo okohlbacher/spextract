@@ -34,7 +34,7 @@ def b64f(vals, double=True):
     return base64.b64encode(struct.pack(fmt, *vals)).decode()
 
 
-def spectrum(idx, ms_level, rt, peaks, im, prec=None):
+def spectrum(idx, ms_level, rt, peaks, im, prec=None, scan=0):
     """One mzML spectrum. `peaks` is [(mz, intensity)], `im` one 1/K0 per peak."""
     mz = b64f([p[0] for p in peaks])
     inten = b64f([p[1] for p in peaks], double=False)
@@ -49,7 +49,7 @@ def spectrum(idx, ms_level, rt, peaks, im, prec=None):
 </isolationWindow><activation><cvParam cvRef="MS" accession="MS:1000044" name="dissociation method"/></activation></precursor></precursorList>"""
     # "frame=<N>" is the vendor key frameIdOf() parses; without it every frame is unmappable and
     # the integer detector falls back, which is how all 8 checks silently ran on the OTHER detector.
-    return f"""<spectrum id="frame={idx + 1} scan=0" index="{idx}" defaultArrayLength="{len(peaks)}">
+    return f"""<spectrum id="frame={idx + 1} scan={scan}" index="{idx}" defaultArrayLength="{len(peaks)}">
 <cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum"/>
 <cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="{ms_level}"/>
 <cvParam cvRef="MS" accession="MS:1000294" name="mass spectrum"/>
@@ -63,7 +63,7 @@ def spectrum(idx, ms_level, rt, peaks, im, prec=None):
 </binaryDataArrayList></spectrum>"""
 
 
-def synth(path, n_cycles=14, cycle_s=1.4, gap_cycles=()):
+def synth(path, n_cycles=14, cycle_s=1.4, gap_cycles=(), im_slices=None):
     """Two precursors that co-elute in one isolation window: a z=2 envelope and a z=1 envelope.
 
     Both are given a 3-peak isotope envelope so `require_isotope_support` keeps them, matching
@@ -74,6 +74,10 @@ def synth(path, n_cycles=14, cycle_s=1.4, gap_cycles=()):
     to five consecutive missing frames before it ends a trace, so one gap must still give ONE
     trace, and seven consecutive gaps must give TWO. Every version of the integer detector that
     lost 92% of peptides passed the other checks in this file; none would have passed this.
+
+    `im_slices`: two ScanNumBegin values; the MS2 frames then alternate between them by cycle,
+    which is how one diaPASEF scheme (PXD017703 "py3") acquires the SAME m/z window twice per
+    cycle with shifted ion-mobility slices. They must become two windows, not one.
     """
     win = (600.0, 590.0, 620.0)                    # target, lo, hi
     z2_mono, z2_im = 601.3, 0.90                   # a doubly-charged precursor
@@ -100,7 +104,7 @@ def synth(path, n_cycles=14, cycle_s=1.4, gap_cycles=()):
         for mz, rel in z1_frags: ms2.append((mz, 1.5e5 * amp * rel)); ms2_im.append(z1_im)
         order = sorted(range(len(ms2)), key=lambda i: ms2[i][0])
         specs.append(spectrum(idx, 2, rt, [ms2[i] for i in order], [ms2_im[i] for i in order],
-                              prec=win)); idx += 1
+                              prec=win, scan=im_slices[c % 2] if im_slices else 0)); idx += 1
     body = "\n".join(specs)
     open(path, "w").write(f"""<?xml version="1.0" encoding="ISO-8859-1"?>
 <indexedmzML xmlns="http://psi.hupo.org/ms/mzml"><mzML version="1.1.0" id="spextract_test">
@@ -324,7 +328,21 @@ def main():
             "fell back to the OpenMS detector without warning -- a silent detector switch"
     check("no calibration -> falls back to openms, loudly", c10)
 
-    total = 6 + 2 + 2
+    # 11: one isolation m/z acquired in two ion-mobility slices is two windows, not one.
+    def c11():
+        import re
+        n_win = lambda r: int(re.search(r"Split into MS1 \+ (\d+) windows", r.stdout).group(1))
+        inp_s = os.path.join(work, "shared.mzML")
+        synth(inp_s, im_slices=(649, 770))
+        r1 = run(binary, inp, os.path.join(work, "one_slice.mzML"))
+        r2 = run(binary, inp_s, os.path.join(work, "two_slices.mzML"))
+        assert n_win(r1) == 1, f"the plain input should be ONE window, got {n_win(r1)}"
+        assert n_win(r2) == 2, (
+            f"two ion-mobility slices of one m/z window were routed to {n_win(r2)} window(s); keyed by "
+            f"m/z alone they collapse into one whose frames are not in retention-time order")
+    check("one m/z window in two IM slices -> two windows", c11)
+
+    total = 6 + 2 + 2 + 1
     print(f"\n{total - len(fails)}/{total} checks passed" + (f"; FAILED: {', '.join(fails)}" if fails else ""))
     return 1 if fails else 0
 

@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Fixed
+- **One isolation m/z acquired in two ion-mobility slices is two windows.** The PXD017703 "py3"
+  scheme (9 of 27 acquisitions) acquires each m/z window in two window groups with shifted,
+  overlapping scan ranges ~1.7 s apart. Keyed by m/z alone they collapsed into one window whose
+  frames were all of group A then all of group B, and the run stopped at the retention-time
+  order guard. The window key now carries `ScanNumBegin` from the vendor native ID; every other
+  scheme has one slice per m/z, so their partition and order are unchanged. New e2e check.
 - **The `C4` calibration term is modelled.** Bruker ModelType 1 files from a 2019 timsTOF Pro
   (firmware 6.0.110; 18 of the 27 public PXD017703 acquisitions) store `C4 = -0.0905`, which the
   model refused as an unmodelled higher-order term. Fitted against the vendor library, the residual

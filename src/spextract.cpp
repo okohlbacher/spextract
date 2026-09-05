@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <array>
 #include <functional>
 #include <cstdio>
 #include <fstream>
@@ -663,21 +664,20 @@ namespace
   /// Vendor frame Id from a native identifier. Bruker writes "frame=<N> scan=<M>"; the mzPeak
   /// reader writes "mzpeak=<frame index> window=<w>". Anything else yields 0, which makes the
   /// calibration fall back to the reference temperature -- so the caller must treat 0 as unknown.
-  inline uint32_t frameIdOf(const String& nid)
+  inline uint32_t nidField(const String& nid, const char* key)
   {
-    // Only the vendor's own "frame=" key names a Frames.Id. The mzPeak reader's "mzpeak=" is an
-    // ARCHIVE index and must not be used as one; that input falls back to the reference factor.
-    for (const char* key : {"frame="})
-    {
-      const size_t i = nid.find(key);
-      if (i == std::string::npos) continue;
-      const size_t j = i + strlen(key);
-      uint32_t v = 0; size_t k = j;
-      for (; k < nid.size() && isdigit((unsigned char)nid[k]); ++k) v = v * 10 + (uint32_t)(nid[k] - '0');
-      if (k > j) return v;
-    }
-    return 0;
+    const size_t i = nid.find(key);
+    if (i == std::string::npos) return 0;
+    uint32_t v = 0; size_t k = i + strlen(key);
+    for (; k < nid.size() && isdigit((unsigned char)nid[k]); ++k) v = v * 10 + (uint32_t)(nid[k] - '0');
+    return v;
   }
+  /// Only the vendor's own "frame=" key names a Frames.Id. The mzPeak reader's "mzpeak=" is an
+  /// ARCHIVE index and must not be used as one; that input falls back to the reference factor.
+  inline uint32_t frameIdOf(const String& nid) { return nidField(nid, "frame="); }
+  /// "scan=<ScanNumBegin>": which ion-mobility slice of the isolation window this frame samples.
+  /// 0 when absent (mzPeak input), which keeps that path keyed by m/z alone, as before.
+  inline uint32_t scanBeginOf(const String& nid) { return nidField(nid, "scan="); }
 
   CompactFrame compactify(const MSSpectrum& s, CompactStats& st)
   {
@@ -1174,12 +1174,21 @@ namespace
   /// Windows are keyed by the SAME (lo,hi) isolation-window key used downstream, taken from the
   /// spectrum's own precursor, so routing is identical to the old split - not by swath_nr, whose
   /// ordering is the reader's business and need not match ours.
+  /// Isolation window identity: (lo*100, hi*100, ScanNumBegin). The scan range is part of it because
+  /// one diaPASEF scheme (Meier 2020 "py3", PXD017703) acquires the SAME m/z window in two window
+  /// groups with shifted, overlapping ion-mobility slices ~1.7 s apart in the cycle. Keyed by m/z
+  /// alone the two halves land in one window as all of group A then all of group B (RT not
+  /// monotone, and a precursor outside the overlap would see every other frame empty). Every
+  /// other scheme has one slice per m/z, so for those this key orders and partitions exactly as
+  /// the old (lo, hi) pair did.
+  using WinKey = std::array<int, 3>;
+
   class PickCompactConsumer : public FullSwathFileConsumer
   {
   public:
-    PickCompactConsumer(PeakPickerIM& picker, map<pair<int, int>, vector<CompactFrame>>& windows,
+    PickCompactConsumer(PeakPickerIM& picker, map<WinKey, vector<CompactFrame>>& windows,
                         PeakMap& ms1, CompactStats& stats,
-                        std::function<pair<int, int>(double, double)> keyfn)
+                        std::function<WinKey(double, double, uint32_t)> keyfn)
       : picker_(picker), windows_(windows), ms1_(ms1), stats_(stats), keyfn_(std::move(keyfn)) {}
 
     size_t frames_seen = 0;
@@ -1281,7 +1290,7 @@ namespace
       const double lo = c - prec[0].getIsolationWindowLowerOffset();
       const double hi = c + prec[0].getIsolationWindowUpperOffset();
       flushMS1_();                                   // MS1 arrives first; pick it before any MS2 work
-      key_.push_back(keyfn_(lo, hi));
+      key_.push_back(keyfn_(lo, hi, scanBeginOf(s.getNativeID())));
       buf_.push_back(std::move(s));                  // pick+compact deferred to flush_()
       ++frames_seen;
       if (buf_.size() >= kBatch) flush_();
@@ -1295,13 +1304,13 @@ namespace
     /// store. SPEXTRACT_PICK_BATCH overrides for the sweep.
     static const size_t kBatch;
     std::vector<MapType::SpectrumType> buf_;
-    std::vector<pair<int, int>> key_;
+    std::vector<WinKey> key_;
     PeakPickerIM& picker_;
     std::vector<MapType::SpectrumType> ms1_buf_;   // MS1 frames awaiting the parallel pick
-    map<pair<int, int>, vector<CompactFrame>>& windows_;
+    map<WinKey, vector<CompactFrame>>& windows_;
     PeakMap& ms1_;
     CompactStats& stats_;
-    std::function<pair<int, int>(double, double)> keyfn_;
+    std::function<WinKey(double, double, uint32_t)> keyfn_;
   };
   const size_t PickCompactConsumer::kBatch =
     std::getenv("SPEXTRACT_PICK_BATCH") ? (size_t)std::atoi(std::getenv("SPEXTRACT_PICK_BATCH")) : 256;
@@ -2620,10 +2629,10 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     // Accept mzML, mzPeak, or a Bruker .d directory; FileHandler auto-detects the format
     // (mzPeak -> MzPeakFile; .d -> BrukerTimsFile, requires WITH_OPENTIMS).
     PeakMap ms1_map;
-    map<pair<int, int>, vector<CompactFrame>> ms2_by_window;
+    map<WinKey, vector<CompactFrame>> ms2_by_window;
     CompactStats cstat;
-    auto winKey = [](double lo, double hi) {
-      return make_pair((int)llround(lo * 100.0), (int)llround(hi * 100.0));
+    auto winKey = [](double lo, double hi, uint32_t scan_begin) -> WinKey {
+      return {(int)llround(lo * 100.0), (int)llround(hi * 100.0), (int)scan_begin};
     };
     const bool stream_load = (getStringOption_("perf:stream_load") == "true");
     bool streamed = false;
@@ -2759,7 +2768,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         const OpenMS::Precursor& pr = s.getPrecursors()[0];
         double lo = pr.getMZ() - pr.getIsolationWindowLowerOffset();
         double hi = pr.getMZ() + pr.getIsolationWindowUpperOffset();
-        ms2_by_window[winKey(lo, hi)].push_back(compactify(s, cstat));
+        ms2_by_window[winKey(lo, hi, scanBeginOf(s.getNativeID()))].push_back(compactify(s, cstat));
       }
     }
     exp.clear(true); // frames moved out; release the container
@@ -3159,7 +3168,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     // canonically sorted, so output is thread-count-independent. Exceptions (e.g. MassTraceDetection
     // on a degenerate window) are captured and rethrown serially. [C-3,H-5,C-5,par-Crit-2/3/4]
     //-------------------------------------------------------------
-    vector<pair<pair<int, int>, vector<CompactFrame>*>> window_list;
+    vector<pair<WinKey, vector<CompactFrame>*>> window_list;
     window_list.reserve(ms2_by_window.size());
     for (auto& kv : ms2_by_window) window_list.emplace_back(kv.first, &kv.second);
     // [heavy-first] Process the biggest windows FIRST. With n_conc slots and unequal windows,
@@ -3339,8 +3348,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       [&]() {
       try
       {
-        const double win_lo = window_list[wi].first.first / 100.0;
-        const double win_hi = window_list[wi].first.second / 100.0;
+        const double win_lo = window_list[wi].first[0] / 100.0;
+        const double win_hi = window_list[wi].first[1] / 100.0;
         // [dyn-mem] wait for room before materialising anything
         const size_t need = project(*window_list[wi].second);
         for (;;)

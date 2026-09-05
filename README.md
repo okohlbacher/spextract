@@ -174,7 +174,7 @@ by raw counts. The two statements are about different things and both have been 
 python3 test/test_spextract.py build/spextract
 ```
 
-Ten end-to-end checks against a synthetic acquisition: isotope ownership, the charge floor,
+Eleven end-to-end checks against a synthetic acquisition: isotope ownership, the charge floor,
 parameter validation, thread-count determinism, mass-trace extension across missing cycles, and
 that the shipped detector is the one that actually runs. No fixtures, no framework, no network.
 
