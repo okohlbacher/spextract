@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
+- **The `C4` calibration term is modelled.** Bruker ModelType 1 files from a 2019 timsTOF Pro
+  (firmware 6.0.110; 18 of the 27 public PXD017703 acquisitions) store `C4 = -0.0905`, which the
+  model refused as an unmodelled higher-order term. Fitted against the vendor library, the residual
+  of the shipped quadratic is closed by exactly one candidate correction -- an additive offset on
+  the root, `m = u^2 - C4` -- and with the temperature term the closed form reproduces the vendor
+  library to 0.0000 ppm on the first and the last frame. Dropping it is -53..-938 ppm, worst at low
+  mass. Bit-identical on every file with `C4 == 0`; `C3` stays refused (never observed non-zero).
+  Both golden tests pin ten vendor probes on two frames and guard the ablation.
 - **Runs on the public diaPASEF HeLa benchmark (PXD017703).** Three defects the in-house cohort never
   exposed: the calibration loader demanded exactly one `MzCalibration` row (these files have two;
   it now uses the row the frames reference), rejected a stored `C2 == 0` as missing (a real linear

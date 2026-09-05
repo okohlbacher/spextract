@@ -3,7 +3,7 @@
 // into the OpenMS tree by the patch script, and is compiled by the dependency-free golden test on
 // every CI platform -- including Windows, which has no sqlite3.h. Only the tool needs this file.
 #pragma once
-#include "TdfMzCalibration.h"
+#include <OpenMS/FORMAT/TdfMzCalibration.h>   // the copy the OpenMS patch installs; same header as src/TdfMzCalibration.h
 #include <sqlite3.h>
 #include <cmath>
 #include <limits>
