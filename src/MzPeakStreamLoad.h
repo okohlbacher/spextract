@@ -27,10 +27,6 @@
 #include <OpenMS/FORMAT/TdfMzCalibration.h>   // installed by the OpenMS patch (same header as src/TdfMzCalibration.h)
 #include <zip.h>
 #include <zlib.h>
-#if __has_include(<SQLiteCpp/SQLiteCpp.h>)
-#include <SQLiteCpp/SQLiteCpp.h>   // OpenMS' in-tree extern (src/openms/extern/SQLiteCpp); not installed by OpenMS
-#define SPX_HAVE_SQLITECPP 1
-#endif
 #include <arrow/api.h>
 #include <arrow/io/memory.h>
 #include <parquet/file_reader.h>
@@ -136,33 +132,9 @@ namespace spx
                if (rc != Z_OK && rc != Z_STREAM_END) { std::fclose(out); inflateEnd(&zs); throw std::runtime_error("mzpeak: gunzip of analysis.tdf.gz failed"); }
                std::fwrite(ob.data(), 1, ob.size() - zs.avail_out, out); } while (rc != Z_STREAM_END);
           inflateEnd(&zs); std::fclose(out); }
-#ifndef SPX_HAVE_SQLITECPP
-        throw std::runtime_error("mzpeak exact m/z needs SQLiteCpp headers at build time (OpenMS extern); rebuild inside the OpenMS tree");
-#else
-        {
-          SQLite::Database db(std::string(tmpl), SQLite::OPEN_READONLY);
-          // The row the frames reference, not "the only row" (see loadTofAxis in spextract.cpp).
-          SQLite::Statement ids(db, "SELECT DISTINCT MzCalibration FROM Frames");
-          long long cal_id = -1; int ncal = 0;
-          while (ids.executeStep()) { cal_id = ids.getColumn(0).getInt64(); ++ncal; }
-          if (ncal != 1) throw std::runtime_error("frames reference " + std::to_string(ncal) + " distinct MzCalibration rows");
-          SQLite::Statement q(db, "SELECT ModelType, DigitizerTimebase, DigitizerDelay, C0, C1, C2, T1, dC1, dC2, C3, C4 FROM MzCalibration WHERE Id = ?");
-          q.bind(1, cal_id);
-          if (!q.executeStep()) throw std::runtime_error("mzpeak: no MzCalibration row in the embedded tdf");
-          cal.model_type = q.getColumn(0).getInt(); cal.digitizer_timebase = q.getColumn(1).getDouble(); cal.digitizer_delay = q.getColumn(2).getDouble();
-          cal.C0 = q.getColumn(3).getDouble(); cal.C1 = q.getColumn(4).getDouble(); cal.C2 = q.getColumn(5).getDouble(); cal.T1_ref = q.getColumn(6).getDouble();
-          cal.dC1 = q.getColumn(7).getDouble(); cal.dC2 = q.getColumn(8).getDouble(); cal.C3 = q.getColumn(9).getDouble(); cal.C4 = q.getColumn(10).getDouble();
-          if (q.executeStep()) throw std::runtime_error("mzpeak: more than one MzCalibration row");
-          if (!cal.isSupported()) throw std::runtime_error("mzpeak: " + cal.unsupportedReason());
-          SQLite::Statement f(db, "SELECT Id, T1 FROM Frames");
-          while (f.executeStep())
-          {
-            const long id = f.getColumn(0).getInt64(); if (id < 0 || id > 10000000) throw std::runtime_error("mzpeak: implausible Frames.Id");
-            if ((size_t)id >= t1_by_frame.size()) t1_by_frame.resize((size_t)id + 1, cal.T1_ref);
-            t1_by_frame[(size_t)id] = f.getColumn(1).isNull() ? cal.T1_ref : f.getColumn(1).getDouble();
-          }
-        }
-#endif
+        { std::string why;
+          if (!spextract::loadTdfCalibration(std::string(tmpl), cal, t1_by_frame, why))
+            throw std::runtime_error("mzpeak: " + why); }
         std::remove(tmpl);
         enabled = true;
       }

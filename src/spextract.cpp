@@ -18,9 +18,6 @@
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <unordered_map>
 #include <cstring>
-#if __has_include(<SQLiteCpp/SQLiteCpp.h>)
-#include <SQLiteCpp/SQLiteCpp.h>
-#endif
 // spextract::TdfMzCalibration comes from <OpenMS/FORMAT/TdfMzCalibration.h>, installed by the
 // OpenMS patch and already included via the mzPeak loader; including the in-tree copy as well
 // redefines the struct.
@@ -612,56 +609,22 @@ namespace
   /// refuses to run rather than substituting a reference temperature for every frame.
   inline bool loadTofAxis(const std::string& tdf_path, String& why)
   {
-#if __has_include(<SQLiteCpp/SQLiteCpp.h>)
     TofAxis& ax = tofAxis();
     ax.ok = false;
-    try
-    {
-      SQLite::Database db(tdf_path, SQLite::OPEN_READONLY);
-      // The row the frames reference, not "the only row": PXD017703 acquisitions carry two
-      // MzCalibration rows with every frame on Id 1, and "more than one row" refused them.
-      SQLite::Statement ids(db, "SELECT DISTINCT MzCalibration FROM Frames");
-      long long cal_id = -1; int ncal = 0;
-      while (ids.executeStep()) { cal_id = ids.getColumn(0).getInt64(); ++ncal; }
-      if (ncal != 1) { why = "frames reference " + String(ncal) + " distinct MzCalibration rows"; return false; }
-      SQLite::Statement q(db, "SELECT ModelType, DigitizerTimebase, DigitizerDelay, C0, C1, C2, T1, dC1, dC2, C3, C4 FROM MzCalibration WHERE Id = ?");
-      q.bind(1, cal_id);
-      if (!q.executeStep()) { why = "no MzCalibration row with Id " + String(cal_id); return false; }
-      ax.cal.model_type = q.getColumn(0).getInt();   // was never assigned: the check then saw 0
-      ax.cal.digitizer_timebase = q.getColumn(1).getDouble();
-      ax.cal.digitizer_delay = q.getColumn(2).getDouble();
-      ax.cal.C0 = q.getColumn(3).getDouble(); ax.cal.C1 = q.getColumn(4).getDouble();
-      ax.cal.C2 = q.getColumn(5).getDouble(); ax.cal.T1_ref = q.getColumn(6).getDouble();
-      ax.cal.dC1 = q.getColumn(7).getDouble(); ax.cal.dC2 = q.getColumn(8).getDouble();
-      ax.cal.C3 = q.getColumn(9).getDouble(); ax.cal.C4 = q.getColumn(10).getDouble();
-      if (!ax.cal.isSupported()) { why = ax.cal.unsupportedReason(); return false; }
-      SQLite::Statement fr(db, "SELECT Id, T1 FROM Frames");
-      while (fr.executeStep())
-      {
-        const long long id = fr.getColumn(0).getInt64();
-        if (id < 0) continue;
-        if ((size_t)id >= ax.b_by_frame.size()) ax.b_by_frame.resize((size_t)id + 1, 0.0);
-        ax.b_by_frame[(size_t)id] = ax.cal.frameFactor(fr.getColumn(1).getDouble());
-      }
-      // frames the tdf did not list keep the reference factor rather than a zero
-      // Frames the tdf did not list keep the reference factor rather than a zero -- but index 0
-      // is NOT such a frame. It is the "unknown frame" sentinel (the tdf's Frames.Id starts at 1),
-      // and frameIdOf() returns 0 for any nativeID it cannot parse. Backfilling it to bref is what
-      // let an mzML+sidecar input skip the fallback warning and calibrate every unmapped frame at
-      // reference temperature -- the invented calibration this path is supposed to refuse.
-      const double bref = ax.cal.frameFactor(ax.cal.T1_ref);
-      for (size_t i = 1; i < ax.b_by_frame.size(); ++i) if (!(ax.b_by_frame[i] > 0.0)) ax.b_by_frame[i] = bref;
-      if (!ax.b_by_frame.empty()) ax.b_by_frame[0] = 0.0;
-      if (ax.b_by_frame.size() < 2) { why = "no Frames rows"; return false; }
-      ax.ok = true;
-      return true;
-    }
-    catch (const std::exception& e) { why = e.what(); return false; }
-#else
-    why = "built without SQLiteCpp";
-    (void)tdf_path;
-    return false;
-#endif
+    std::vector<double> t1;
+    if (!spextract::loadTdfCalibration(tdf_path, ax.cal, t1, why)) return false;
+    ax.b_by_frame.assign(t1.size(), 0.0);
+    for (size_t i = 1; i < t1.size(); ++i) ax.b_by_frame[i] = ax.cal.frameFactor(t1[i]);
+    // Frames the tdf did not list keep the reference factor rather than a zero -- but index 0
+    // is NOT such a frame. It is the "unknown frame" sentinel (the tdf's Frames.Id starts at 1),
+    // and frameIdOf() returns 0 for any nativeID it cannot parse. Backfilling it to bref is what
+    // let an mzML+sidecar input skip the fallback warning and calibrate every unmapped frame at
+    // reference temperature -- the invented calibration this path is supposed to refuse.
+    const double bref = ax.cal.frameFactor(ax.cal.T1_ref);
+    for (size_t i = 1; i < ax.b_by_frame.size(); ++i) if (!(ax.b_by_frame[i] > 0.0)) ax.b_by_frame[i] = bref;
+    ax.b_by_frame[0] = 0.0;
+    ax.ok = true;
+    return true;
   }
   constexpr double IM_LO = 0.4, IM_HI = 1.8;
   constexpr double IM_Q = 65535.0 / (IM_HI - IM_LO);
