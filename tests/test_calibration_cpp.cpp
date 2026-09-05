@@ -100,9 +100,37 @@ int main(int argc, char** argv)
   if (bad.isSupported()) { std::fprintf(stderr, "dC2 != 0 must be rejected\n"); return 1; }
   bad.dC2 = 0.0; bad.C3 = 1e-9;
   if (bad.isSupported()) { std::fprintf(stderr, "C3 != 0 must be rejected\n"); return 1; }
-  bad.C3 = 0.0; bad.C4 = 1e-9;
-  if (bad.isSupported()) { std::fprintf(stderr, "C4 != 0 must be rejected\n"); return 1; }
-  bad.C4 = 0.0; bad.C2 = -1e-6;
+  bad.C3 = 0.0; bad.C4 = 0.0;
+  // C4 != 0 is an additive mass offset on the quadratic root (2019 timsTOF Pro, firmware 6.0.110;
+  // the PXD017703 highsens files carry C4 = -0.0905 and every frame references that row). Pinned
+  // against the vendor library on the first and the last frame of one such file; dropping the
+  // term is -53..-938 ppm, so the ablation guard below is what makes this case worth having.
+  {
+    spextract::TdfMzCalibration c4;
+    c4.model_type = 1; c4.digitizer_timebase = 0.2; c4.digitizer_delay = 25224.4;
+    c4.C0 = 325.88517924839397; c4.C1 = 152987.23707178448; c4.C2 = 0.0030691291814964453;
+    c4.C4 = -0.09048112117134345; c4.T1_ref = 25.197341867575105; c4.dC1 = 16.5;
+    if (!c4.isSupported()) { std::fprintf(stderr, "C4 != 0 must be ACCEPTED: %s\n", c4.unsupportedReason().c_str()); return 1; }
+    const double t1[2] = {25.201724358440018, 25.20983751539588};          // frame 1, frame 68428
+    const double tof[5] = {2000.0, 50000.0, 150000.0, 300000.0, 403000.0};
+    const double vendor[2][5] = {{98.00225185761244, 186.40848708590778, 461.14679357131746, 1102.6974507710581, 1702.6599405622635},
+                                 {98.00223875072383, 186.40846214421924, 461.14673185089845, 1102.6973031683212, 1702.6597126456059}};
+    spextract::TdfMzCalibration no_c4 = c4; no_c4.C4 = 0.0;
+    double worst_c4 = 0.0, worst_no_c4 = 0.0;
+    for (int f = 0; f < 2; ++f)
+      for (int i = 0; i < 5; ++i)
+      {
+        const double b4 = c4.frameFactor(t1[f]), got = c4.tofToMz(tof[i], b4);
+        worst_c4 = std::fmax(worst_c4, std::fabs(got - vendor[f][i]) / vendor[f][i] * 1e6);
+        worst_no_c4 = std::fmax(worst_no_c4, std::fabs(no_c4.tofToMz(tof[i], b4) - vendor[f][i]) / vendor[f][i] * 1e6);
+        const double back = c4.mzToTof(got, b4);
+        if (std::fabs(back - tof[i]) > 1e-6) { std::fprintf(stderr, "C4 round trip: %.4f -> %.4f\n", tof[i], back); return 1; }
+      }
+    if (worst_c4 > 1e-4) { std::fprintf(stderr, "C4 case: %.6f ppm from the vendor library\n", worst_c4); return 1; }
+    if (worst_no_c4 < 50.0) { std::fprintf(stderr, "C4 ablation only %.3f ppm -- the case cannot catch a dropped C4\n", worst_no_c4); return 1; }
+    std::printf("OK  C4 offset case: %.6f ppm vs vendor (10 probes, 2 frames); without C4 %.1f ppm\n", worst_c4, worst_no_c4);
+  }
+  bad.C2 = -1e-6;
   if (bad.isSupported()) { std::fprintf(stderr, "C2 < 0 must be rejected\n"); return 1; }
   // C2 == 0.0 STORED in the file is a real calibration -- the 2020 timsTOF Pro firmware behind
   // PXD017703 ships t = C0 + C1_eff*sqrt(m) with no quadratic term, every frame referencing it --

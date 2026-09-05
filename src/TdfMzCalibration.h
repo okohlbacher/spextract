@@ -14,9 +14,14 @@
 //
 //     t_ns   = tof * DigitizerTimebase + DigitizerDelay
 //     C1_eff = C1 * (1 + dC1 * (T1_ref - T1_frame) / 1e6)        // digitizer temperature drift
-//     t_ns   = C0 + (1e6 / sqrt(C1_eff)) * sqrt(m) + C2 * m      // solved for sqrt(m)
+//     t_ns   = C0 + (1e6 / sqrt(C1_eff)) * sqrt(m) + C2 * m      // solved for sqrt(m) =: u
+//     m      = u^2 - C4                                          // C4: additive mass offset
 //
 // Verified to 2.5e-5 ppm max against the vendor library (tests/calibration_golden.json).
+// The C4 term was identified the same way on a 2019 timsTOF Pro (firmware 6.0.110, C4 = -0.0905):
+// of every candidate correction only an additive offset on the root closes the residual, and with
+// the temperature term it reproduces the vendor library to 0.0000 ppm on the first and last frame
+// (tests/test_calibration_cpp.cpp pins both). Dropping it is -53..-938 ppm, worst at low mass.
 // SCOPE OF THAT CLAIM, stated precisely because it is narrower than the file count suggests: the
 // three files share ONE identical MzCalibration vector (same C0/C1/C2/timebase/delay/T1_ref/dC1),
 // so independent coverage of the parameter space is ONE vector -- 12 frames spanning only 0.034 K,
@@ -50,7 +55,8 @@ struct TdfMzCalibration
   double T1_ref = 0.0;  ///< reference digitizer temperature for the calibration
   double dC1 = 0.0;     ///< ppm/K drift of C1
   double dC2 = 0.0;     ///< drift of C2 -- NOT modelled; must be 0 (see isSupported)
-  double C3 = 0.0, C4 = 0.0;   ///< higher-order terms -- NOT modelled; must be 0
+  double C3 = 0.0;      ///< NOT modelled; must be 0 (never observed non-zero)
+  double C4 = 0.0;      ///< additive mass offset on the quadratic root: m = u^2 - C4
 
   /// Why this calibration cannot be used, or empty if it can. Fail closed, never approximate.
   std::string unsupportedReason() const
@@ -63,7 +69,7 @@ struct TdfMzCalibration
     // for every peak, silently, under an "exact" log line. Real values are ~1e5. [claude review]
     if (!(C1 > 1.0) || !(C1 < 1e12)) return "MzCalibration C1 outside the plausible range (1, 1e12)";
     if (dC2 != 0.0) return "MzCalibration dC2 != 0 (temperature drift of C2 is not modelled)";
-    if (C3 != 0.0 || C4 != 0.0) return "MzCalibration C3/C4 != 0 (higher-order terms are not modelled)";
+    if (C3 != 0.0) return "MzCalibration C3 != 0 (not modelled; never observed non-zero)";
     // C2 == 0 is NOT a benign degenerate case: the pure-sqrt law it selects is exactly the
     // known-bad open implementation (2-39 ppm on real vectors). The vendor schema declares
     // C0..C4 with no type and no NOT NULL, so a NULL or text C2 arrives here as 0.0 through
@@ -104,13 +110,15 @@ struct TdfMzCalibration
     const double denom = b + std::sqrt(disc);
     if (!(denom > 0.0)) return std::numeric_limits<double>::quiet_NaN();
     const double u = 2.0 * (t - C0) / denom;
-    return u * u;
+    const double m = u * u - C4;   // bit-identical to u*u when C4 == 0, i.e. on every earlier file
+    return m > 0.0 ? m : std::numeric_limits<double>::quiet_NaN();
   }
 
   /// m/z -> TOF index (exact inverse of tofToMz; the model is closed-form in this direction).
   double mzToTof(double mz, double b) const
   {
-    const double t = C0 + b * std::sqrt(mz > 0.0 ? mz : 0.0) + C2 * mz;
+    const double m = mz + C4;
+    const double t = C0 + b * std::sqrt(m > 0.0 ? m : 0.0) + C2 * m;
     return (t - digitizer_delay) / digitizer_timebase;
   }
 };

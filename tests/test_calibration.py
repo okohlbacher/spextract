@@ -37,13 +37,32 @@ def tof_to_mz(tof, p, t1_frame, use_c2=True, use_temp=True):
     b = 1e6 / math.sqrt(c1)
     c2 = p["C2"] if use_c2 else 0.0
     if abs(c2) < 1e-12:                      # degenerate: pure sqrt law
-        return ((t_ns - p["C0"]) / b) ** 2
+        return ((t_ns - p["C0"]) / b) ** 2 - p.get("C4", 0.0)
     disc = b * b - 4.0 * c2 * (p["C0"] - t_ns)
     u = (-b + math.sqrt(max(disc, 0.0))) / (2.0 * c2)
-    return u * u
+    return u * u - p.get("C4", 0.0)       # C4: additive mass offset on the root
 
 def ppm(a, b):
     return abs(a - b) / b * 1e6
+
+def check_c4_offset():
+    """C4 != 0 is an additive mass offset on the quadratic root (2019 timsTOF Pro, firmware 6.0.110,
+    PXD017703 highsens files: C4 = -0.0905). Pinned against the vendor library on the first and the
+    last frame of one file; dropping the term is -53..-938 ppm."""
+    p = {"timebase": 0.2, "delay": 25224.4, "C0": 325.88517924839397, "C1": 152987.23707178448,
+         "C2": 0.0030691291814964453, "C4": -0.09048112117134345, "T1_ref": 25.197341867575105, "dC1": 16.5}
+    vendor = {25.201724358440018: [(2000.0, 98.00225185761244), (50000.0, 186.40848708590778), (150000.0, 461.14679357131746),
+                                   (300000.0, 1102.6974507710581), (403000.0, 1702.6599405622635)],
+              25.20983751539588:  [(2000.0, 98.00223875072383), (50000.0, 186.40846214421924), (150000.0, 461.14673185089845),
+                                   (300000.0, 1102.6973031683212), (403000.0, 1702.6597126456059)]}
+    no_c4 = dict(p, C4=0.0); worst, worst_no_c4 = 0.0, 0.0
+    for t1, probes in vendor.items():
+        for tof, mz in probes:
+            worst = max(worst, ppm(tof_to_mz(tof, p, t1), mz))
+            worst_no_c4 = max(worst_no_c4, ppm(tof_to_mz(tof, no_c4, t1), mz))
+    assert worst < TOL_PPM, f"C4 case: {worst:.6f} ppm from the vendor library"
+    assert worst_no_c4 > 50.0, f"C4 ablation only {worst_no_c4:.3f} ppm -- the case cannot catch a dropped C4"
+    print(f"OK  C4 offset case: {worst:.6f} ppm vs vendor (10 probes, 2 frames); without C4 {worst_no_c4:.1f} ppm")
 
 def check_linear_c2_zero():
     """C2 == 0 stored in the file (PXD017703, 2020 timsTOF Pro) is a real, purely linear-in-sqrt
@@ -61,6 +80,7 @@ def check_linear_c2_zero():
 
 def main():
     check_linear_c2_zero()
+    check_c4_offset()
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibration_golden.json")
     files = json.load(open(path))
     n = 0
