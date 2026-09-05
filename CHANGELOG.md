@@ -2,41 +2,14 @@
 
 ## [Unreleased]
 
-## v1.1.0 — 2026-09-04
-
-### Changed
-- **`-threads` now defaults to every core** instead of 1. The window loop is the runtime, so a
-  single-threaded default was wrong for anyone who did not know to override it. An explicit
-  `-threads 1` is still honoured: the command line is inspected rather than the value compared, so
-  the one user who genuinely wants it serial is not overridden. Measured on a 224-core machine,
-  all-cores against the benchmark's `-threads 100`: 5:10 vs 5:22 wall for identical output. The gain
-  over 100 threads is small because window concurrency is bounded by a free-RAM admission gate, not
-  by cores; the gain over the previous default of 1 is not small.
-- **The output format now follows the `-out` extension, and `.mzpeak` is the default** when the name
-  does not say. `-out_type` forces it. mzPeak is a columnar archive and lands at roughly a third the
-  size of the equivalent mzML (2.25 GB vs 6.23 GB on the same run, same 655,776 spectra).
-
-  **Know what this costs before relying on it.** DDA search engines read mzML, not mzPeak, and
-  OpenMS' own `FileConverter` does not accept mzPeak as an input type. If the output is going into
-  a search — which is the tool's usual purpose — write `.mzML`. The tool warns whenever it writes
-  mzPeak, for exactly this reason.
-
-
-## v1.0.0 — 2026-09-04
-
-First public release. Same code as v0.3.0; this is the point at which the project became a
-published tool rather than an internal one.
-
-- Published from a fresh repository with no inherited history. The development repository, its
-  frozen `evidence/` record and the review transcripts remain private, because they name
-  acquisitions and specimens from a patient-derived cohort.
-- All acquisition names, specimen identifiers, cohort and study names, internal hostnames and
-  local filesystem paths are absent from this repository and from its history.
-- Benchmark datasets appear as `dataset A`..`dataset F`. The measurements are unchanged and remain
-  attributable to a consistent label; the identities do not travel with them.
-- Added for publication: `CONTRIBUTING.md`, `SECURITY.md`, issue and pull-request templates, and a
-  CI matrix over five platforms plus a weekly build that compiles the tool against a patched
-  OpenMS built from source.
+### Measured
+- **`perf:stream_load` is a sensitivity/resource trade, not a free default.** Both readers searched
+  with both engines on two datasets plus entrapment: equivalent on the smaller file, but on the
+  larger one the one-shot reader finds +223 Sage peptides (+2.0%) at unchanged entrapment FDR
+  (1.13% vs 1.15%) -- real signal the streaming path loses, for 1.75x the memory and 1.6x the wall.
+  The default stays `true`; `false` is now documented as the more sensitive setting.
+- **Entrapment FDR on all six datasets, shipping configuration: 1.13-1.31% at a nominal 1%**, every
+  interval overlapping. The peptide counts on record are honest to about a quarter point of FDR.
 
 
 ## v0.3.0 — 2026-09-04
@@ -71,8 +44,10 @@ which is where the README's stated 80-125 GB requirement comes from.
   default to true; pass `false` to restore the old behaviour. **`perf:stream_load` also CHANGES
   OUTPUT** -- checked rather than assumed, and the assumption was wrong: true gives 655,776 spectra
   in 5:11 at 78.4 GB, false gives 656,371 in 10:30 at 121.8 GB, and the spectrum lists are not
-  identical. The two readers pick peaks on different frame groupings; which is closer to the truth
-  is unmeasured. Every figure this project has published used `true`. This is the same class of defect as
+  identical. The two readers pick peaks on different frame groupings. (Which one is closer to the
+  truth was settled on 2026-09-05 -- see "Measured" at the top of this file: the one-shot reader is
+  slightly better on a large file, at unchanged entrapment FDR, for 1.75x the memory.) Every figure
+  this project has published used `true`. This is the same class of defect as
   the `ms2_noise_threshold_int` / `ms2_split_valleys` mismatch fixed on 2026-09-03 -- that sweep
   checked value-bearing options and missed the flags.
 

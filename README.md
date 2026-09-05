@@ -56,6 +56,12 @@ The binary is `build/spextract`. `cmake --install build` puts it in `bin/`.
 
 ### OpenMS patches
 
+> **Known blocker (2026-09-05).** The patches below were cut against an OpenMS tree exported from a
+> private branch, and there is currently **no public OpenMS commit they apply to** — so a stranger
+> cannot yet build SpeXtract from this repository. Rebasing them onto a public commit is the top
+> open issue; until then the numbers here are reproducible only inside the originating group. This
+> is stated plainly rather than left for you to discover at the patch step.
+
 `scripts/apply_openms_patches.sh` installs `src/TdfMzCalibration.h` into the OpenMS tree and applies
 two patches. **Both matter, and the build will not tell you if they are missing:**
 
@@ -111,7 +117,7 @@ when that format is mzPeak.
 | `-trace:detector` | `integer` | `integer` works on the instrument's flight-time bin; `openms` uses OpenMS `MassTraceDetection`. Different algorithms — see below |
 | `-charge:min_charge` | 2 | lowest precursor charge to emit. Singly-charged hypotheses are ~30% of emission and ~1.7% of peptides |
 | `-assembly:require_isotope_support` | `true` | drop precursor hypotheses with no isotope partner. `false` roughly doubles emission, is ~7× slower, and identifies fewer peptides |
-| `-perf:stream_load` | `true` | read the `.d` frame by frame. `false` holds the whole run in memory **and changes the output** |
+| `-perf:stream_load` | `true` | read the `.d` frame by frame. `false` holds the whole run in memory, **changes the output, and on a large acquisition finds ~2% more peptides at the same measured FDR** — the more sensitive setting if you can afford ~1.75× the memory |
 | `-trace:max_span_sec` | 120 | trim a mass trace to this many seconds around its apex |
 | `-out_type` | from extension | force `mzpeak` or `mzML` instead of taking it from the `-out` name |
 
