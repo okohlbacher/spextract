@@ -79,11 +79,19 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build spextract/build
 
+      # OpenMS refuses to start without its share/ directory (unit definitions, CV terms). A source
+      # build does not install it, so point at the tree directly. Without this the binary dies on
+      # --help with an uncaught exception whose message never reaches the log.
       - name: The binary runs and reports itself
+        env:
+          OPENMS_DATA_PATH: ${{ github.workspace }}/OpenMS/share/OpenMS
         run: |
-          spextract/build/spextract --help | head -5
-          spextract/build/spextract --help | grep -q '^SpeXtract' \
-            || { echo "the tool does not identify itself as SpeXtract"; exit 1; }
+          spextract/build/spextract --help > help.txt 2>&1 || { cat help.txt; exit 1; }
+          head -5 help.txt
+          grep -q '^SpeXtract' help.txt \
+            || { echo "the tool does not identify itself as SpeXtract"; cat help.txt; exit 1; }
 
       - name: End-to-end suite against the freshly built binary
+        env:
+          OPENMS_DATA_PATH: ${{ github.workspace }}/OpenMS/share/OpenMS
         run: python3 spextract/test/test_spextract.py spextract/build/spextract
