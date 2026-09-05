@@ -34,10 +34,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build ccache \
+            build-essential cmake ninja-build ccache ca-certificates lsb-release wget \
             qt6-base-dev libqt6svg6-dev \
             libboost-all-dev libeigen3-dev libxerces-c-dev libbz2-dev zlib1g-dev \
-            libglpk-dev libsvm-dev libhdf5-dev libsqlite3-dev libzip-dev
+            libglpk-dev libsvm-dev libhdf5-dev libsqlite3-dev libzip-dev \
+            coinor-libcbc-dev coinor-libcgl-dev coinor-libclp-dev \
+            coinor-libcoinutils-dev coinor-libosi-dev
+          # Arrow/Parquet are not in stock Ubuntu; OpenMS needs them for the mzPeak format.
+          wget -q "https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb"
+          sudo apt-get install -y ./apache-arrow-apt-source-latest-*.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarrow-dev libparquet-dev
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1
