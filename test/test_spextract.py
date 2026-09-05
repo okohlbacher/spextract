@@ -137,8 +137,10 @@ def synth_tdf(path, n_frames):
     db.execute("INSERT INTO MzCalibration VALUES (1,?,?,?,?,?,?,?,?,0,0,0)",
                (g["model_type"], g["timebase"], g["delay"], g["C0"], g["C1"], g["C2"],
                 g["T1_ref"], g["dC1"]))
-    db.execute("CREATE TABLE Frames (Id INTEGER, T1 REAL)")
-    db.executemany("INSERT INTO Frames VALUES (?,?)",
+    # Real tdfs reference the calibration row per frame (Frames.MzCalibration); mirror that, since
+    # the loader selects the row the frames reference rather than "the only row".
+    db.execute("CREATE TABLE Frames (Id INTEGER, T1 REAL, MzCalibration INTEGER)")
+    db.executemany("INSERT INTO Frames VALUES (?,?,1)",
                    [(i + 1, g["T1_ref"] + 0.03 * (i % 3)) for i in range(n_frames)])
     db.commit(); db.close()
     return path

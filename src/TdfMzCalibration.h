@@ -140,9 +140,21 @@ inline bool loadTdfCalibration(const std::string& tdf, TdfMzCalibration& cal,
   sqlite3_stmt* st = nullptr;
   long long cal_id = -1; int ncal = 0;
   if (sqlite3_prepare_v2(db, "SELECT DISTINCT MzCalibration FROM Frames", -1, &st, nullptr) == SQLITE_OK)
+  {
     while (sqlite3_step(st) == SQLITE_ROW) { cal_id = sqlite3_column_int64(st, 0); ++ncal; }
-  sqlite3_finalize(st); st = nullptr;
-  if (ncal != 1) { why = "frames reference " + std::to_string(ncal) + " distinct MzCalibration rows"; sqlite3_close(db); return false; }
+    sqlite3_finalize(st); st = nullptr;
+    if (ncal != 1) { why = "frames reference " + std::to_string(ncal) + " distinct MzCalibration rows"; sqlite3_close(db); return false; }
+  }
+  else
+  {
+    // Frames has no MzCalibration column (a minimal or very old tdf): fall back to the single-row
+    // rule rather than refusing -- the reference is then unambiguous only if there IS one row.
+    sqlite3_finalize(st); st = nullptr;
+    if (sqlite3_prepare_v2(db, "SELECT Id FROM MzCalibration", -1, &st, nullptr) == SQLITE_OK)
+      while (sqlite3_step(st) == SQLITE_ROW) { cal_id = sqlite3_column_int64(st, 0); ++ncal; }
+    sqlite3_finalize(st); st = nullptr;
+    if (ncal != 1) { why = "Frames has no MzCalibration column and MzCalibration has " + std::to_string(ncal) + " rows (need exactly 1)"; sqlite3_close(db); return false; }
+  }
   if (sqlite3_prepare_v2(db, "SELECT ModelType, DigitizerTimebase, DigitizerDelay, C0, C1, C2, T1, dC1, dC2, C3, C4 "
                              "FROM MzCalibration WHERE Id = ?", -1, &st, nullptr) != SQLITE_OK
       || sqlite3_bind_int64(st, 1, cal_id) != SQLITE_OK || sqlite3_step(st) != SQLITE_ROW)
