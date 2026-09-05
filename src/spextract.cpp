@@ -675,9 +675,11 @@ namespace
   /// Only the vendor's own "frame=" key names a Frames.Id. The mzPeak reader's "mzpeak=" is an
   /// ARCHIVE index and must not be used as one; that input falls back to the reference factor.
   inline uint32_t frameIdOf(const String& nid) { return nidField(nid, "frame="); }
-  /// "scan=<ScanNumBegin>": which ion-mobility slice of the isolation window this frame samples.
+  /// "windowGroup=<WindowGroup>": which acquisition group this frame belongs to. A group holds each
+  /// isolation m/z at most once, so (m/z, group) names one ion-mobility slice of the window; the
+  /// scan range alone does not (two slices can share ScanNumBegin = 0 and differ in ScanNumEnd).
   /// 0 when absent (mzPeak input), which keeps that path keyed by m/z alone, as before.
-  inline uint32_t scanBeginOf(const String& nid) { return nidField(nid, "scan="); }
+  inline uint32_t windowGroupOf(const String& nid) { return nidField(nid, "windowGroup="); }
 
   CompactFrame compactify(const MSSpectrum& s, CompactStats& st)
   {
@@ -1174,7 +1176,7 @@ namespace
   /// Windows are keyed by the SAME (lo,hi) isolation-window key used downstream, taken from the
   /// spectrum's own precursor, so routing is identical to the old split - not by swath_nr, whose
   /// ordering is the reader's business and need not match ours.
-  /// Isolation window identity: (lo*100, hi*100, ScanNumBegin). The scan range is part of it because
+  /// Isolation window identity: (lo*100, hi*100, WindowGroup). The group is part of it because
   /// one diaPASEF scheme (Meier 2020 "py3", PXD017703) acquires the SAME m/z window in two window
   /// groups with shifted, overlapping ion-mobility slices ~1.7 s apart in the cycle. Keyed by m/z
   /// alone the two halves land in one window as all of group A then all of group B (RT not
@@ -1290,7 +1292,7 @@ namespace
       const double lo = c - prec[0].getIsolationWindowLowerOffset();
       const double hi = c + prec[0].getIsolationWindowUpperOffset();
       flushMS1_();                                   // MS1 arrives first; pick it before any MS2 work
-      key_.push_back(keyfn_(lo, hi, scanBeginOf(s.getNativeID())));
+      key_.push_back(keyfn_(lo, hi, windowGroupOf(s.getNativeID())));
       buf_.push_back(std::move(s));                  // pick+compact deferred to flush_()
       ++frames_seen;
       if (buf_.size() >= kBatch) flush_();
@@ -2631,8 +2633,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     PeakMap ms1_map;
     map<WinKey, vector<CompactFrame>> ms2_by_window;
     CompactStats cstat;
-    auto winKey = [](double lo, double hi, uint32_t scan_begin) -> WinKey {
-      return {(int)llround(lo * 100.0), (int)llround(hi * 100.0), (int)scan_begin};
+    auto winKey = [](double lo, double hi, uint32_t window_group) -> WinKey {
+      return {(int)llround(lo * 100.0), (int)llround(hi * 100.0), (int)window_group};
     };
     const bool stream_load = (getStringOption_("perf:stream_load") == "true");
     bool streamed = false;
@@ -2768,7 +2770,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         const OpenMS::Precursor& pr = s.getPrecursors()[0];
         double lo = pr.getMZ() - pr.getIsolationWindowLowerOffset();
         double hi = pr.getMZ() + pr.getIsolationWindowUpperOffset();
-        ms2_by_window[winKey(lo, hi, scanBeginOf(s.getNativeID()))].push_back(compactify(s, cstat));
+        ms2_by_window[winKey(lo, hi, windowGroupOf(s.getNativeID()))].push_back(compactify(s, cstat));
       }
     }
     exp.clear(true); // frames moved out; release the container
