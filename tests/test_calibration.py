@@ -49,10 +49,10 @@ def check_linear_c2_zero():
     """C2 == 0 stored in the file (PXD017703, 2020 timsTOF Pro) is a real, purely linear-in-sqrt
     calibration and must be accepted; the quadratic collapses to sqrt(m) = (t - C0) / b."""
     p = {"timebase": 0.2, "delay": 25131.0, "C0": 315.70325869866065,
-         "C1": 154272.1271422364, "C2": 0.0, "T1": 25.63315397685876, "dC1": -0.2}
+         "C1": 154272.1271422364, "C2": 0.0, "T1_ref": 25.63315397685876, "dC1": -0.2}
     import math
     for tof in (60000.0, 120000.0, 240000.0, 400000.0):
-        got = tof_to_mz(tof, p, p["T1"])
+        got = tof_to_mz(tof, p, p["T1_ref"])
         t = tof * p["timebase"] + p["delay"]
         b = 1e6 / math.sqrt(p["C1"])
         expect = ((t - p["C0"]) / b) ** 2
