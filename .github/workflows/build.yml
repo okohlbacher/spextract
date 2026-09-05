@@ -1,22 +1,16 @@
 name: full build
 
-# SpeXtract cannot be built against any RELEASED OpenMS package, and that is a property of the
-# tool, not of CI:
-#   * it includes <OpenMS/FORMAT/TdfMzCalibration.h>, which scripts/apply_openms_patches.sh
-#     installs INTO the OpenMS tree;
-#   * it calls BrukerTimsFile::lastMzCalibration, which the same patch ADDS to OpenMS;
-#   * it uses BrukerTimsFile::loadDIAStreaming and PeakPickerIM, which postdate OpenMS 3.5.0,
-#     the newest tagged release.
-# So a real build needs OpenMS built from source at 3.6 and then patched. That takes about an hour
-# with a warm cache, which is why it does not run on every push. It runs weekly and on demand, and
-# it is the only job here that proves the tool still compiles.
+# Builds OpenMS from source at the commit pinned in patches/openms.lock, applies the SpeXtract
+# patches, builds the tool, and runs the end-to-end suite against the binary it just built.
 #
-# It is deliberately NOT continue-on-error. A build job that is allowed to fail quietly is worse
-# than no build job: it reports green while the tool does not compile.
-
-# Builds OpenMS from source at the pinned commit in patches/openms.lock, applies the SpeXtract
-# patches, builds the tool and runs the end-to-end suite against the binary it just built. This is
-# the only job that proves the tool compiles, so it is deliberately NOT continue-on-error.
+# SpeXtract cannot be built against a RELEASED OpenMS package, and that is a property of the tool
+# rather than of CI: it uses BrukerTimsFile::loadDIAStreaming and PeakPickerIM, which postdate
+# OpenMS 3.5.0, the newest tag; and it needs the two patches in patches/, one of which adds
+# BrukerTimsFile::lastMzCalibration(). Hence a source build at a pinned commit.
+#
+# Roughly an hour with a warm ccache, so it runs weekly and on demand rather than per push. It is
+# the only job that proves the tool compiles, and it is deliberately NOT continue-on-error: a build
+# job allowed to fail quietly reports green while the tool does not build.
 on:
   workflow_dispatch:
     inputs:
@@ -43,7 +37,7 @@ jobs:
             build-essential cmake ninja-build ccache \
             qt6-base-dev libqt6svg6-dev \
             libboost-all-dev libeigen3-dev libxerces-c-dev libbz2-dev zlib1g-dev \
-            libglpk-dev libsvm-dev libhdf5-dev libsqlite3-dev
+            libglpk-dev libsvm-dev libhdf5-dev libsqlite3-dev libzip-dev
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1
