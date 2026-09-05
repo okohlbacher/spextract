@@ -22,6 +22,7 @@
 // OpenMS patch and already included via the mzPeak loader; including the in-tree copy as well
 // redefines the struct.
 #include <OpenMS/FORMAT/TdfMzCalibration.h>
+#include "TdfLoad.h"   // loadTdfCalibration: sqlite3, tool-only
 #include <OpenMS/FEATUREFINDER/ElutionPeakDetection.h>
 #include <OpenMS/PROCESSING/CENTROIDING/PeakPickerIM.h>
 #include <OpenMS/IONMOBILITY/IMTypes.h>

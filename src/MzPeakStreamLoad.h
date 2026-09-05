@@ -14,6 +14,7 @@
 #pragma once
 #ifdef SPEXTRACT_WITH_MZPEAK
 
+#include "TdfLoad.h"
 #include <mzpeak/open.h>
 #include <mzpeak/index.h>
 #include <mzpeak/spectra.h>
