@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed
+- **Runs on the public diaPASEF HeLa benchmark (PXD017703).** Three defects the in-house cohort never
+  exposed: the calibration loader demanded exactly one `MzCalibration` row (these files have two;
+  it now uses the row the frames reference), rejected a stored `C2 == 0` as missing (a real linear
+  calibration on 2020 timsTOF Pro firmware; NULL is now told apart from zero), and -- on a stock
+  OpenMS install -- silently fell back to the `openms` detector because `loadTofAxis` sat behind a
+  `__has_include` for an in-tree OpenMS header. Both tdf readers now use the sqlite3 C API and a
+  missing SQLite is a compile error. First public-data extraction: 136,818 spectra in 57 s.
+
 ### Measured
 - **`perf:stream_load` is a sensitivity/resource trade, not a free default.** Both readers searched
   with both engines on two datasets plus entrapment: equivalent on the smaller file, but on the

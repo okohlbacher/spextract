@@ -68,7 +68,12 @@ struct TdfMzCalibration
     // known-bad open implementation (2-39 ppm on real vectors). The vendor schema declares
     // C0..C4 with no type and no NOT NULL, so a NULL or text C2 arrives here as 0.0 through
     // sqlite3_column_double -- indistinguishable from a real zero. Reject both. [claude review]
-    if (!(C2 > 0.0)) return "MzCalibration C2 <= 0 or missing (the quadratic term is required)";
+    // C2 == 0.0 stored in the file is a real calibration: the 2020 timsTOF Pro firmware behind
+    // PXD017703 ships t = C0 + C1_eff*sqrt(m) with no quadratic term, and every frame references
+    // it. What must NOT pass is a NULL C2 (the column has no type and no NOT NULL), which the C API
+    // would hand over as 0.0 -- the loader converts NULL to NaN so it fails the finiteness check
+    // above with its own reason. Negative C2 flips the root branch and is rejected as before.
+    if (C2 < 0.0) return "MzCalibration C2 < 0 (negative quadratic term is not a supported model)";
     if (!(digitizer_timebase > 0.0)) return "DigitizerTimebase <= 0";
     return std::string();
   }
@@ -144,10 +149,13 @@ inline bool loadTdfCalibration(const std::string& tdf, TdfMzCalibration& cal,
   { why = "no MzCalibration row with Id " + std::to_string(cal_id); sqlite3_finalize(st); sqlite3_close(db); return false; }
   cal.model_type = sqlite3_column_int(st, 0);
   cal.digitizer_timebase = sqlite3_column_double(st, 1); cal.digitizer_delay = sqlite3_column_double(st, 2);
-  cal.C0 = sqlite3_column_double(st, 3); cal.C1 = sqlite3_column_double(st, 4); cal.C2 = sqlite3_column_double(st, 5);
+  cal.C0 = sqlite3_column_double(st, 3); cal.C1 = sqlite3_column_double(st, 4);
+  cal.C2 = (sqlite3_column_type(st, 5) == SQLITE_NULL) ? std::numeric_limits<double>::quiet_NaN()
+                                                       : sqlite3_column_double(st, 5);
   cal.T1_ref = sqlite3_column_double(st, 6); cal.dC1 = sqlite3_column_double(st, 7); cal.dC2 = sqlite3_column_double(st, 8);
   cal.C3 = sqlite3_column_double(st, 9); cal.C4 = sqlite3_column_double(st, 10);
   sqlite3_finalize(st); st = nullptr;
+  if (std::isnan(cal.C2)) { why = "MzCalibration C2 is NULL (missing, not zero)"; sqlite3_close(db); return false; }
   if (!cal.isSupported()) { why = cal.unsupportedReason(); sqlite3_close(db); return false; }
   t1_by_frame.clear();
   if (sqlite3_prepare_v2(db, "SELECT Id, T1 FROM Frames", -1, &st, nullptr) == SQLITE_OK)
