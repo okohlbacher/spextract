@@ -43,12 +43,10 @@
  #include <opentims++/scan2inv_ion_mobility_converter.h>
  #include <OpenMS/FORMAT/RationalScan2ImConverter.h>
  #include <SQLiteCpp/SQLiteCpp.h>
-@@ -918,9 +926,107 @@
-         return PerFramePressureCompensationWithMissingReference;
-       default:
+@@ -920,7 +928,112 @@
          return NoPressureCompensation;
-+    }
-+  }
+     }
+   }
 +
 +// [speXtract table-mz] License-free EXACT TOF->m/z from the TDF MzCalibration table.
 +// The MODEL lives in speXtract's own repo (src/TdfMzCalibration.h, BSD-3, copied here by
@@ -76,16 +74,23 @@
 +      sqlite3_close(db);   // sqlite allocates the handle even on failure
 +      throw std::runtime_error("TdfMzCalibration: cannot open " + tdf + ": " + why);
 +    }
++    // Use the calibration row the FRAMES reference (Frames.MzCalibration), not "the only row".
++    // A tdf may carry more than one MzCalibration row -- the public PXD017703 HeLa acquisitions
++    // have two, of which every frame references Id 1 -- so "expected exactly 1" refused valid
++    // data. Refuse only when the frames reference more than one row, which would need a
++    // per-frame calibration this converter does not implement.
 +    sqlite3_stmt* st = nullptr;
-+    int nrows = 0;
-+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM MzCalibration", -1, &st, nullptr) == SQLITE_OK
-+        && sqlite3_step(st) == SQLITE_ROW) nrows = sqlite3_column_int(st, 0);
++    long long cal_id = -1; int ncal = 0;
++    if (sqlite3_prepare_v2(db, "SELECT DISTINCT MzCalibration FROM Frames", -1, &st, nullptr) == SQLITE_OK)
++      while (sqlite3_step(st) == SQLITE_ROW) { cal_id = sqlite3_column_int64(st, 0); ++ncal; }
 +    sqlite3_finalize(st); st = nullptr;
-+    if (nrows != 1)
-+    { sqlite3_close(db); throw std::runtime_error("TdfMzCalibration: " + std::to_string(nrows) + " MzCalibration rows, expected exactly 1"); }
++    if (ncal != 1)
++    { sqlite3_close(db); throw std::runtime_error("TdfMzCalibration: frames reference " + std::to_string(ncal)
++        + " distinct MzCalibration rows, expected exactly 1 (per-frame recalibration is not supported)"); }
 +    if (sqlite3_prepare_v2(db,
 +          "SELECT ModelType, DigitizerTimebase, DigitizerDelay, C0, C1, C2, T1, dC1, dC2, C3, C4 "
-+          "FROM MzCalibration LIMIT 1", -1, &st, nullptr) == SQLITE_OK
++          "FROM MzCalibration WHERE Id = ?", -1, &st, nullptr) == SQLITE_OK
++        && sqlite3_bind_int64(st, 1, cal_id) == SQLITE_OK
 +        && sqlite3_step(st) == SQLITE_ROW)
 +    {
 +      for (int col = 0; col <= 10; ++col)
@@ -103,7 +108,7 @@
 +      cal_.C2 = sqlite3_column_double(st, 5); cal_.T1_ref = sqlite3_column_double(st, 6);
 +      cal_.dC1 = sqlite3_column_double(st, 7); cal_.dC2 = sqlite3_column_double(st, 8);
 +      cal_.C3 = sqlite3_column_double(st, 9);  cal_.C4 = sqlite3_column_double(st, 10);
-     }
++    }
 +    sqlite3_finalize(st); st = nullptr;
 +    if (!cal_.isSupported())
 +    { const std::string why = cal_.unsupportedReason(); sqlite3_close(db); throw std::runtime_error("TdfMzCalibration: " + why); }
@@ -130,7 +135,7 @@
 +    }
 +    sqlite3_finalize(st);
 +    sqlite3_close(db);
-   }
++  }
 +  // frame_id 0 is not a real Bruker frame (Frames.Id is 1-based); one pristine OpenMS DDA path
 +  // converts with a hardcoded 0. Slot 0 therefore holds T1_ref by construction = no temperature
 +  // correction (<=0.7 ppm on the files measured). Documented rather than incidental.
@@ -151,7 +156,7 @@
    // =====================================================================
    // Helper: open TimsDataHandle with tiered calibration strategy
    // =====================================================================
-@@ -977,7 +1083,14 @@
+@@ -977,7 +1090,14 @@
            handle->scan2inv_ion_mobility_converter =
              BrukerScan2InvIonMobilityConverterFactory::instance(sdk_path)
                .produce(*handle, pcs);
@@ -167,7 +172,7 @@
                            << (pcs != NoPressureCompensation ? " (pressure_comp=on)" : "")
                            << std::endl;
            return handle;
-@@ -1000,6 +1113,39 @@
+@@ -1000,6 +1120,39 @@
        }
      }
  
@@ -207,7 +212,7 @@
      // 3. Try rational model from TimsCalibration table (AUTO or RATIONAL)
      if (strategy == Strategy::AUTO || strategy == Strategy::RATIONAL)
      {
-@@ -1024,7 +1170,7 @@
+@@ -1024,7 +1177,7 @@
    // =====================================================================
    // Helper: convert a single opentims frame to MSSpectrum
    // =====================================================================
@@ -216,7 +221,7 @@
    {
      spec.clear(true);
      spec.setRT(frame.time);
-@@ -1044,7 +1190,7 @@
+@@ -1044,7 +1197,7 @@
      std::vector<double> inv_ion_mobilities(frame.num_peaks);
  
      frame.save_to_buffs(nullptr, scan_ids.data(), nullptr, intensities.data(),
@@ -225,7 +230,7 @@
  
      // Fill spectrum peaks
      spec.reserve(frame.num_peaks);
-@@ -1073,7 +1219,7 @@
+@@ -1073,7 +1226,7 @@
    // =====================================================================
    static void centroidMS1Frame(TimsFrame& frame, MSSpectrum& spec,
                                 const BrukerTimsFile::Config& config,
@@ -234,7 +239,7 @@
    {
      spec.clear(true);
      spec.setRT(frame.time);
-@@ -1090,7 +1236,7 @@
+@@ -1090,7 +1243,7 @@
      std::vector<double> inv_ion_mobilities(frame.num_peaks);
  
      frame.save_to_buffs(nullptr, nullptr, nullptr, intensities.data(),
@@ -243,7 +248,7 @@
  
      // Run centroiding
      centroider.loadFrame(mzs.data(), intensities.data(), inv_ion_mobilities.data(), frame.num_peaks);
-@@ -1124,12 +1270,12 @@
+@@ -1124,12 +1277,12 @@
    // =====================================================================
    static void loadMS1Spectrum(TimsFrame& frame, MSSpectrum& spec,
                                const BrukerTimsFile::Config& config,
@@ -259,7 +264,7 @@
    }
  
    // =====================================================================
-@@ -1396,29 +1542,74 @@
+@@ -1396,29 +1549,74 @@
  
      const size_t ms1_to_emit = config.load_ms1 ? ms1_frame_ids.size() : 0;
      startProgress(0, ms1_to_emit, "Streaming DIA-PASEF MS1 frames");
@@ -351,7 +356,7 @@
      }
      endProgress();
      centroider.reportCapSummary(static_cast<size_t>(config.ms1_centroid_max_peaks));
-@@ -1448,71 +1639,124 @@
+@@ -1448,71 +1646,124 @@
      startProgress(0, total_work, "Streaming DIA-PASEF MS2 frames");
      Size progress_count = 0;
  
@@ -518,13 +523,12 @@
        }
      }
      endProgress();
-@@ -1525,10 +1769,13 @@
-   {
+@@ -1526,9 +1777,12 @@
      load(path, exp, Config());
    }
-+
-+  const std::string& BrukerTimsFile::lastMzCalibration() { return g_mz_calibration; }
  
++  const std::string& BrukerTimsFile::lastMzCalibration() { return g_mz_calibration; }
++
    void BrukerTimsFile::load(const String& path, MSExperiment& exp, const Config& config)
    {
      exp.clear(true);
@@ -532,7 +536,7 @@
      auto handle = openTimsDataHandle(path, config);
  
      String tdf_path = path + "/analysis.tdf";
-@@ -1551,6 +1798,7 @@
+@@ -1551,6 +1805,7 @@
      loadExperimentalSettings_(path, exp);
  
      // Sort by RT, interleaved across MS levels

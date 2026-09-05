@@ -618,8 +618,15 @@ namespace
     try
     {
       SQLite::Database db(tdf_path, SQLite::OPEN_READONLY);
-      SQLite::Statement q(db, "SELECT ModelType, DigitizerTimebase, DigitizerDelay, C0, C1, C2, T1, dC1, dC2, C3, C4 FROM MzCalibration");
-      if (!q.executeStep()) { why = "no MzCalibration row"; return false; }
+      // The row the frames reference, not "the only row": PXD017703 acquisitions carry two
+      // MzCalibration rows with every frame on Id 1, and "more than one row" refused them.
+      SQLite::Statement ids(db, "SELECT DISTINCT MzCalibration FROM Frames");
+      long long cal_id = -1; int ncal = 0;
+      while (ids.executeStep()) { cal_id = ids.getColumn(0).getInt64(); ++ncal; }
+      if (ncal != 1) { why = "frames reference " + String(ncal) + " distinct MzCalibration rows"; return false; }
+      SQLite::Statement q(db, "SELECT ModelType, DigitizerTimebase, DigitizerDelay, C0, C1, C2, T1, dC1, dC2, C3, C4 FROM MzCalibration WHERE Id = ?");
+      q.bind(1, cal_id);
+      if (!q.executeStep()) { why = "no MzCalibration row with Id " + String(cal_id); return false; }
       ax.cal.model_type = q.getColumn(0).getInt();   // was never assigned: the check then saw 0
       ax.cal.digitizer_timebase = q.getColumn(1).getDouble();
       ax.cal.digitizer_delay = q.getColumn(2).getDouble();
@@ -627,7 +634,6 @@ namespace
       ax.cal.C2 = q.getColumn(5).getDouble(); ax.cal.T1_ref = q.getColumn(6).getDouble();
       ax.cal.dC1 = q.getColumn(7).getDouble(); ax.cal.dC2 = q.getColumn(8).getDouble();
       ax.cal.C3 = q.getColumn(9).getDouble(); ax.cal.C4 = q.getColumn(10).getDouble();
-      if (q.executeStep()) { why = "more than one MzCalibration row"; return false; }
       if (!ax.cal.isSupported()) { why = ax.cal.unsupportedReason(); return false; }
       SQLite::Statement fr(db, "SELECT Id, T1 FROM Frames");
       while (fr.executeStep())
@@ -1478,7 +1484,11 @@ protected:
   void registerOptionsAndFlags_() override
   {
     registerInputFile_("in", "<file>", "", "Input diaPASEF data (ion-mobility DIA; 1/K0 / VSSC): mzML, mzPeak, or a Bruker .d directory.");
+#ifdef SPEXTRACT_WITH_MZPEAK
     setValidFormats_("in", {"mzML", "mzpeak", "d"});
+#else
+    setValidFormats_("in", {"mzML", "d"});      // stock OpenMS does not know the mzpeak format
+#endif
     registerOutputFile_("out", "<file>", "", "Output pseudo-MS2 spectra. The FORMAT FOLLOWS THE "
                         "EXTENSION: .mzpeak (default) or .mzML. mzPeak is columnar and much smaller; "
                         "mzML is what DDA search engines read today, so pass an .mzML name (or "
