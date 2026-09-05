@@ -1,3 +1,5 @@
+#ifndef SPEXTRACT_TDF_MZ_CALIBRATION_H
+#define SPEXTRACT_TDF_MZ_CALIBRATION_H
 // Copyright (c) 2026, SpeXtract authors. BSD-3-Clause.
 //
 // Exact TOF -> m/z conversion for Bruker TDF (timsTOF) data, ModelType 1.
@@ -114,3 +116,5 @@ struct TdfMzCalibration
 };
 
 } // namespace spextract
+
+#endif // SPEXTRACT_TDF_MZ_CALIBRATION_H
