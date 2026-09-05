@@ -5,7 +5,7 @@
 #   - remote lock so deploys cannot interleave with each other
 #   - old source kept as .bak; restored if the build fails (no silent src/binary drift)
 #   - provenance records OpenMS version + EPD-patch marker count, not just our source
-#   - every deploy appended to evidence/DEPLOY-LOG.md locally and deploys.log remotely
+#   - every deploy appended to deploys.log on the node
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NODE=${1:-ibminode05}
@@ -50,5 +50,3 @@ ssh "$NODE" "set -eu
       \"\$OMSVER\" \"\$(sha256sum \$EPD | cut -d' ' -f1)\" \"\$(grep -c 'SpeXtract\|lock' \$EPD || true)\"
   } > bin/spextract.provenance.tmp && mv bin/spextract.provenance.tmp bin/spextract.provenance
   cat bin/spextract.provenance | tee -a /scratch/kohlbach/deploys.log"
-{ echo "## $(date -Iseconds) -> $NODE"; echo '```'; echo "src_sha256=$SHA"; echo "git=$GITREV"; echo '```'; } >> evidence/DEPLOY-LOG.md
-echo "deploy recorded in evidence/DEPLOY-LOG.md"
