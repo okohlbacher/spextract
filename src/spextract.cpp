@@ -1483,7 +1483,11 @@ protected:
                         "EXTENSION: .mzpeak (default) or .mzML. mzPeak is columnar and much smaller; "
                         "mzML is what DDA search engines read today, so pass an .mzML name (or "
                         "-out_type mzML) if the next step is a search.");
+#ifdef SPEXTRACT_WITH_MZPEAK
     setValidFormats_("out", {"mzpeak", "mzML"});
+#else
+    setValidFormats_("out", {"mzML"});
+#endif
     registerStringOption_("out_type", "<type>", "", "Force the output format instead of taking it "
                           "from the extension of -out. Empty = follow the extension; mzPeak if the "
                           "extension says nothing.", false);
@@ -2666,7 +2670,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       PickCompactConsumer consumer(spicker, ms2_by_window, ms1_map, cstat, winKey);
       try
       {
+#ifdef SPEXTRACT_WITH_MZPEAK
         if (FileHandler::getTypeByFileName(in) == FileTypes::MZPEAK)
+#else
+        if (false)
+#endif
         {
 #ifdef SPEXTRACT_WITH_MZPEAK
           spx::loadMzPeakStreaming(in, consumer, n_threads_req);   // consumer counts frames itself
@@ -2697,7 +2705,13 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     if (!streamed)
     {
       Phase _ph("LOAD(full)");
-      FileHandler().loadExperiment(in, exp, {FileTypes::MZML, FileTypes::MZPEAK, FileTypes::BRUKER_TDF}, log_type_);
+      FileHandler().loadExperiment(in, exp,
+#ifdef SPEXTRACT_WITH_MZPEAK
+                                   {FileTypes::MZML, FileTypes::MZPEAK, FileTypes::BRUKER_TDF},
+#else
+                                   {FileTypes::MZML, FileTypes::BRUKER_TDF},
+#endif
+                                   log_type_);
     }
 
     //-------------------------------------------------------------
@@ -4007,8 +4021,9 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
                          (int)(getStringOption_("assembly:require_isotope_support") == "true"));
     // Output format. The extension is authoritative, because that is what a user typing
     // `-out pseudo.mzML` means; -out_type overrides it; mzPeak is the default when neither says.
-    FileTypes::Type out_type = FileTypes::UNKNOWN;
+    FileTypes::Type out_type = FileTypes::MZML;
     const String out_type_opt = getStringOption_("out_type");
+#ifdef SPEXTRACT_WITH_MZPEAK
     if (!out_type_opt.empty())
       { String t = out_type_opt; t.toLower(); out_type = (t == "mzml") ? FileTypes::MZML : FileTypes::MZPEAK; }
     else
@@ -4020,7 +4035,15 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     if (out_type == FileTypes::MZPEAK)
       writeLogInfo_("Writing mzPeak. NOTE: DDA search engines read mzML, not mzPeak -- if this file "
                     "is going straight into a search, write .mzML instead (or -out_type mzML).");
-    { Phase _ph(out_type == FileTypes::MZPEAK ? "WRITE(mzPeak)" : "WRITE(mzML)");
+#else
+    // Built without mzPeak support: mzML is the only container this binary can write. Refuse an
+    // explicit request for mzPeak rather than silently writing something else.
+    if (!out_type_opt.empty() && out_type_opt.toLower() != "mzml")
+      throw OpenMS::Exception::InvalidParameter(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+            "-out_type mzpeak needs a build with mzPeak support (-DMZPEAK_ROOT=...); this binary "
+            "can only write mzML.");
+#endif
+    { Phase _ph(out_type == FileTypes::MZML ? "WRITE(mzML)" : "WRITE(mzPeak)");
       FileHandler().storeExperiment(out, out_exp, {out_type}, log_type_); }
     writeLogInfo_("Wrote " + String(n_out) + " pseudo-MS2 spectra to " + out
                   + " (" + String(FileTypes::typeToName(out_type)) + ")");
