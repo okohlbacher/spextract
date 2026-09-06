@@ -2921,7 +2921,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         double lo = pr.getMZ() - pr.getIsolationWindowLowerOffset();
         double hi = pr.getMZ() + pr.getIsolationWindowUpperOffset();
         ms2_by_window[winKey(lo, hi, windowGroupOf(s.getNativeID()))].push_back(compactify(s, cstat));
-      }
+        s.clear(true);   // [mem] the picked frame is dead once compacted; waiting for exp.clear()
+      }                  // below held the whole picked run (20 B/peak) beside the compact store
     }
     exp.clear(true); // frames moved out; release the container
     {
@@ -2956,7 +2957,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     {
       vector<double>& ax = rtAxis();
       ax.clear();
-      ax.reserve(ms1_map.size() + 1024);
+      { size_t nf = ms1_map.size(); for (const auto& kv : ms2_by_window) nf += kv.second.size();
+        ax.reserve(nf + 1024); }   // MS1 *and* every window's MS2 frames land here [mem]
       for (const auto& sp : ms1_map) ax.push_back(sp.getRT());
       for (const auto& kv : ms2_by_window) for (const auto& f : kv.second) ax.push_back(f.rt);
       sort(ax.begin(), ax.end());
@@ -3283,9 +3285,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     });
     vector<double> prec_mz(precursors.size());
     for (size_t i = 0; i < precursors.size(); ++i) prec_mz[i] = precursors[i].mono_mz;
-    // MEMORY: ms1_map is dead the moment its traces exist (nothing below reads it). Release it
-    // rather than letting it ride to end of scope through the whole parallel phase. [mem]
-    ms1_map.clear(true);
+    // NOTE: ms1_map is already empty here. detectTraces_ takes it by non-const reference and
+    // releases every spectrum as it distributes it into the m/z bands, then clears the container
+    // itself; a clear() at this point frees nothing. The bytes it used to be credited with are
+    // released one phase earlier -- into the picking threads' allocator arenas, which is why the
+    // resident set does not fall there either. [mem]
     // MEMORY: scoring reads the profile of ms1_traces[pc.trace_idx], so ms1_traces must STAY -- but only the
     // traces an actual precursor points at are ever dereferenced. Free the xic of the rest
     // (2.5M traces vs 1.2M precursors => roughly half are dead weight held through scoring). [mem]
@@ -3876,6 +3880,15 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       }      // omp task
     }
     if (worker_err) std::rethrow_exception(worker_err);
+    // MEMORY: every MS1 structure is dead once the window loop has joined -- scoring was its only
+    // reader (assembleOne_ -> scoreCandidates_ dereferences ms1_traces[pc.trace_idx] and its span).
+    // They used to ride to the end of main_, i.e. through the canonical sort, the optional merge
+    // and consolidate passes, the PeakMap assembly and the whole mzML write. [mem]
+    vector<Trace>().swap(ms1_traces);
+    ms1_store = TraceStore();
+    vector<Precursor_>().swap(precursors);
+    vector<double>().swap(prec_mz);
+    writeLogInfo_("[mem] MS1 traces, spans, precursors released after the window loop." + rss_() + mem_());
 
     if (rp_max > 0)
     {
