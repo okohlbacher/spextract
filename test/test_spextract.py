@@ -204,11 +204,12 @@ def ms1_traces_near(tsv, mz, tol=0.02):
 
 def digest(mzml):
     """Hash the spectrum data only -- the header carries a wall-clock stamp and parameters."""
-    h, on = hashlib.sha256(), False
+    h, on, done = hashlib.sha256(), False, False
     for line in open(mzml, "rb"):
         if b"<spectrumList" in line: on = True
         if on: h.update(line)
-        if b"</spectrumList>" in line: break
+        if b"</spectrumList>" in line: done = True; break
+    assert on and done, f"{mzml}: no complete <spectrumList> -- the empty hash would compare equal to another empty hash"
     return h.hexdigest()
 
 
@@ -342,7 +343,17 @@ def main():
             f"m/z alone they collapse into one whose frames are not in retention-time order")
     check("one m/z window in two IM slices -> two windows", c11)
 
-    total = 6 + 2 + 2 + 1
+    # 12: the MS1 arena compaction walks kept spans in OFFSET order. The vector is sorted by m/z after
+    #     its spans were appended in detection order, and the previous container-order walk overwrote
+    #     spans it had not copied yet (~1% of precursor XICs, deterministic). The selftest's fixture
+    #     presents traces in an order that defeats that walk.
+    def c12():
+        r = run(binary, inp, os.path.join(work, "selftest_arena.mzML"), extra=("-diag:selftest_arena",))
+        assert "[arena] selftest passed" in (r.stdout + r.stderr), \
+            "arena selftest did not report success:\n" + (r.stdout + r.stderr)[-1500:]
+    check("MS1 arena compaction survives container order != offset order", c12)
+
+    total = 6 + 2 + 2 + 1 + 1
     print(f"\n{total - len(fails)}/{total} checks passed" + (f"; FAILED: {', '.join(fails)}" if fails else ""))
     return 1 if fails else 0
 

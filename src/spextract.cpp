@@ -361,6 +361,44 @@ namespace
     t.len = (uint16_t)(hi - lo + 1); t.apex = (uint16_t)(a - lo); t.npts = np;
   }
 
+  /// Drop the spans of the traces nobody references and compact the arena IN PLACE, walking the kept
+  /// spans in ORIGINAL OFFSET order -- not container order. ms1_traces is sorted by m/z after its
+  /// spans were appended in detection order, so container order is not offset order, and the
+  /// previous walk (monotone write cursor over the container) overwrote spans it had not copied yet:
+  /// ~1% of precursor XICs, deterministically. Spans are pairwise disjoint on this path (every
+  /// child gets its own makeSpan append; trimToSpan only shrinks), and that is VALIDATED before a
+  /// byte moves: in ascending-offset order the write cursor can never pass the next source.
+  /// A freed trace keeps its scalars and loses its span. Returns the number of profiles released.
+  inline Size compactUnreferenced(vector<Trace>& tr, TraceStore& store, const vector<bool>& needed)
+  {
+    vector<uint32_t> ids;
+    Size freed = 0;
+    for (size_t i = 0; i < tr.size(); ++i)
+    {
+      if (!needed[i]) { if (tr[i].np() > 0) ++freed; tr[i].freeProfile(); continue; }
+      if (tr[i].len > 0) ids.push_back((uint32_t)i);     // a zero-length span owns no bytes
+    }
+    sort(ids.begin(), ids.end(), [&](uint32_t a, uint32_t b) { return tr[a].off < tr[b].off; });
+    uint64_t prev_end = 0;
+    for (uint32_t i : ids)
+    {
+      const uint64_t beg = tr[i].off, end = beg + (uint64_t)tr[i].len;
+      if (end > store.inten.size() || beg < prev_end)
+        throw OpenMS::Exception::Precondition(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
+                                              "MS1 spans overlap or exceed the arena");
+      prev_end = end;
+    }
+    size_t w = 0;
+    for (uint32_t i : ids)
+    {
+      Trace& t = tr[i];
+      if (w != t.off) std::memmove(store.inten.data() + w, store.inten.data() + t.off, (size_t)t.len * sizeof(float));
+      t.off = (uint32_t)w; w += t.len;
+    }
+    store.inten.resize(w); store.inten.shrink_to_fit();
+    return freed;
+  }
+
   /// Build a span from (store-local frame, intensity) points into `store`, returning the trace
   /// with `st` UNSET: the caller sets it once the store is immutable. Points may arrive unsorted.
   inline Trace makeSpan(vector<pair<uint32_t, float>>& pts, TraceStore& store)
@@ -1526,6 +1564,7 @@ protected:
     setValidStrings_("trace:mz_estimator", {"apex", "mean", "median"});
     registerDoubleOption_("trace:ms2_split_valleys", "<chrom_fwhm>", 7.0, "[way-2] Split MS2 mass traces at chromatographic local minima via ElutionPeakDetection (which MassTraceDetection never does - it only terminates on outliers, so two peptides 25 s apart within the m/z tolerance MERGE). Value is chrom_fwhm in seconds; it sets both the Savitzky-Golay window and the local-extrema half-window. 0 = OFF. Try 6-8 (peaks here are 5-30 s). width_filtering is forced off so this only SPLITS, never deletes.", false);
     registerFlag_("diag:selftest_wavelet", "[wavelet] Run assertions on the a-trous smoother and exit. Tests the SHIPPED functions, not a copy: DC preservation (filter must sum to 1, or every correlation is rescaled), noise reduction, peak-height retention at the FWHM-derived scale, mirror edges (a truncated peak must not be dragged toward zero), and level selection from sampling. Exits non-zero on failure.", true);
+    registerFlag_("diag:selftest_arena", "[arena] Run assertions on the MS1 arena compaction (compactUnreferenced) and exit: kept spans must survive a container order that differs from their offset order", true);
     registerDoubleOption_("trace:wavelet_smooth", "<x>", 0.0, "[wavelet] Smooth the PRECURSOR XIC with a stationary (a-trous) B3-spline wavelet before correlating fragments against it, at a scale of x TIMES THE MEASURED MS1 FWHM. the reference implementation smooths its precursor profile (2D Gaussian + Savitzky-Golay) and then applies a 0.3 correlation threshold; we copied the 0.3 but not the smoothing. Pearson r between two NOISY profiles is attenuated toward 0 as S/N falls, so an unsmoothed 0.3 is a systematically weaker constraint than a smoothed 0.3 -- and worst at faint precursors, which is where the coverage analysis says peptides are lost. Fragment XICs stay RAW (as in the reference implementation) and emitted peak intensities are unaffected. 0 = off. Try 0.25-0.5 (measured MS1 FWHM is 3.61 s on dataset D, so 0.5 ~ 1.8 s ~ 1.3 cycles).", false);
     registerDoubleOption_("trace:split_valleys_fwhm", "<x>", 0.0, "[fwhm] Set the valley-splitting window as a MULTIPLE OF THE MEASURED MS1 FWHM instead of absolute seconds. Overrides trace:ms2_split_valleys when > 0 (the MS2 window is the one it sets). Absolute seconds cannot be right across methods: 14.0 s is +0.0% peptides on a 31 min gradient and -1.06% on a 5.6 min one. Measured MS1 FWHM is 3.61 s on dataset D, so the old 7.0 s default is ~1.9x FWHM and 14.0 s is ~3.9x. 0 = off (use absolute seconds).", false);
     registerDoubleOption_("trace:ms1_split_valleys", "<chrom_fwhm>", 7.0, "Split MS1 mass traces at chromatographic valleys via ElutionPeakDetection. DEFAULT 7.0 s: MassTraceDetection never splits at a local minimum, so two peptides eluting ~25 s apart within the m/z tolerance merge into ONE multi-modal trace, producing a merged precursor with the wrong monoisotope and charge. Measured +36.7% peptides on dataset B and +37.4% on dataset A at peptide-level FDR. Costs ~1.7x wall time and ~25% peak RAM. 0 = off.", false);
@@ -2409,6 +2448,76 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     for (int gi : touched) pdense[gi] = 0.0f;                          // reset scratch
   }
 
+  /// [arena] Assertions on the SHIPPED compactUnreferenced(): the compaction must survive traces
+  /// whose container order differs from their arena-offset order, which the previous walk did not.
+  ExitCodes selftestArena_()
+  {
+    int fail = 0;
+    auto chk = [&](bool ok, const char* what) {
+      if (!ok) { writeLogError_(String("FAIL: ") + what); ++fail; }
+      else writeLogInfo_(String("  ok  ") + what);
+    };
+    // four spans A(4) B(3) C(5) D(2) at offsets 0, 4, 7, 12, every value distinct; span k of trace T
+    // holds T*100 + k + 1, with a gap (zero) inside D so interior zeros are exercised
+    auto build = [](TraceStore& st, vector<Trace>& tr) {
+      st = TraceStore(); tr.clear();
+      const vector<pair<uint32_t, int>> spec = {{4, 1}, {3, 2}, {5, 3}, {3, 4}};
+      for (const auto& [L, tag] : spec)
+      {
+        vector<pair<uint32_t, float>> pts;
+        for (uint32_t k = 0; k < L; ++k) if (!(tag == 4 && k == 1)) pts.emplace_back(k, (float)(tag * 100 + k + 1));
+        tr.push_back(makeSpan(pts, st));
+      }
+    };
+    auto bytes = [](const TraceStore& st, const Trace& t) {
+      return vector<float>(st.inten.begin() + t.off, st.inten.begin() + t.off + t.len);
+    };
+    TraceStore st0; vector<Trace> tr0; build(st0, tr0);
+    vector<vector<float>> ref; for (const auto& t : tr0) ref.push_back(bytes(st0, t));
+    chk(st0.inten.size() == 15 && tr0[3].len == 3 && tr0[3].npts == 2, "fixture: 15 floats, D spans 3 frames with a gap");
+
+    // 1. container order D,B,A,C (offsets 12,4,0,7), keep D,B,A, drop C. The old container-order walk
+    //    moved D to 0 and B to 2 before reading A from [0,4): A came back as D's and B's bytes.
+    { vector<Trace> v = {tr0[3], tr0[1], tr0[0], tr0[2]}; TraceStore s = st0;
+      const Size freed = compactUnreferenced(v, s, vector<bool>{true, true, true, false});
+      chk(freed == 1, "1: one profile released");
+      chk(s.inten.size() == 10, "1: arena holds exactly the kept spans (4+3+3)");
+      chk(bytes(s, v[0]) == ref[3], "1: D survives (interior zero kept)");
+      chk(bytes(s, v[1]) == ref[1], "1: B survives");
+      chk(bytes(s, v[2]) == ref[0], "1: A survives -- the old walk overwrote it");
+      chk(v[3].len == 0 && v[3].npts == 0, "1: C freed (span cleared)"); }
+    // 2. offset order, everything needed: unchanged bytes, no move
+    { vector<Trace> v = tr0; TraceStore s = st0;
+      chk(compactUnreferenced(v, s, vector<bool>(4, true)) == 0, "2: nothing released");
+      bool ok = s.inten.size() == 15; for (size_t i = 0; i < 4; ++i) ok = ok && bytes(s, v[i]) == ref[i];
+      chk(ok, "2: offset-order input is a no-op"); }
+    // 3. the freed trace first, then a trimmed span: the trim moved off/len/apex (as trimToSpan does)
+    { vector<Trace> v = {tr0[2], tr0[0], tr0[1], tr0[3]}; TraceStore s = st0;
+      v[1].off += 1; v[1].len -= 2; v[1].frame0 += 1; v[1].npts = 2;          // A trimmed to [1,3)
+      const vector<float> a_trim(ref[0].begin() + 1, ref[0].begin() + 3);
+      chk(compactUnreferenced(v, s, vector<bool>{false, true, true, true}) == 1, "3: C released first");
+      chk(bytes(s, v[1]) == a_trim && bytes(s, v[2]) == ref[1] && bytes(s, v[3]) == ref[3], "3: trimmed A, B, D survive");
+      chk(s.inten.size() == 2 + 3 + 3, "3: arena sized to the trimmed spans"); }
+    // 4. nobody needed / a needed trace whose span was already released (len == 0) / duplicate references
+    { vector<Trace> v = tr0; TraceStore s = st0;
+      chk(compactUnreferenced(v, s, vector<bool>(4, false)) == 4 && s.inten.empty(), "4a: none needed -> empty arena");
+      vector<Trace> w = tr0; TraceStore s2 = st0; w[0].freeProfile();
+      chk(compactUnreferenced(w, s2, vector<bool>(4, true)) == 0 && s2.inten.size() == 11 && bytes(s2, w[1]) == ref[1], "4b: a needed len==0 trace owns no bytes"); }
+    // 5. compaction is idempotent
+    { vector<Trace> v = {tr0[3], tr0[1], tr0[0], tr0[2]}; TraceStore s = st0;
+      compactUnreferenced(v, s, vector<bool>{true, true, true, false});
+      const vector<float> once = s.inten;
+      compactUnreferenced(v, s, vector<bool>{true, true, true, false});
+      chk(s.inten == once && bytes(s, v[2]) == ref[0], "5: second compaction is a no-op"); }
+    // 6. overlapping spans are refused before any byte moves
+    { vector<Trace> v = tr0; TraceStore s = st0; v[1].off = 2;                    // B now overlaps A
+      bool threw = false; try { compactUnreferenced(v, s, vector<bool>(4, true)); } catch (const OpenMS::Exception::Precondition&) { threw = true; }
+      chk(threw, "6: overlapping spans throw Precondition"); }
+
+    writeLogInfo_(fail ? "[arena] SELFTEST FAILED" : "[arena] selftest passed");
+    return fail ? UNEXPECTED_RESULT : EXECUTION_OK;
+  }
+
   /// [wavelet] Assertions on the SHIPPED a-trous smoother. Each check corresponds to a way the
   /// transform could be wrong while still "looking smoothed" in a plot.
   ExitCodes selftestWavelet_()
@@ -2612,6 +2721,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     const double delta_im = getDoubleOption_("gate:delta_im");
     const double delta_rt = getDoubleOption_("gate:delta_rt");
     if (getFlag_("diag:selftest_wavelet")) return selftestWavelet_();
+    if (getFlag_("diag:selftest_arena")) return selftestArena_();
     log_overlap_ = (getStringOption_("gate:coelution") == "logoverlap");
     rank_by_intensity_ = (getStringOption_("assembly:rank_by") == "intensity");
     im_weight_sigma_ = getDoubleOption_("assembly:im_weight_sigma");
@@ -3141,22 +3251,10 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       vector<bool> needed(ms1_traces.size(), false);
       for (const auto& pc : precursors)
         if (pc.trace_idx < ms1_traces.size()) needed[pc.trace_idx] = true;
-      // The spans share one arena, so releasing a trace means COMPACTING: copy only the needed
-      // spans into a fresh arena and rebase. The freed traces keep their scalars and lose their span.
-      // IN PLACE: traces were appended in increasing offset order and a kept span only ever moves
-      // to a LOWER offset, so the copy never overlaps forward. A second arena here would have
-      // doubled the MS1 arena at exactly the moment it is largest.
-      Size freed = 0;
-      size_t w = 0;
-      for (size_t i = 0; i < ms1_traces.size(); ++i)
-      {
-        Trace& t = ms1_traces[i];
-        if (!needed[i]) { if (t.np() > 0) ++freed; t.freeProfile(); continue; }
-        if (w != t.off) std::memmove(ms1_store.inten.data() + w, ms1_store.inten.data() + t.off,
-                                     (size_t)t.len * sizeof(float));
-        t.off = (uint32_t)w; w += t.len;
-      }
-      ms1_store.inten.resize(w); ms1_store.inten.shrink_to_fit();
+      // The spans share one arena, so releasing a trace means COMPACTING, in place (a second arena
+      // would double the MS1 arena at exactly the moment it is largest) and in OFFSET order -- see
+      // compactUnreferenced() for why container order corrupted ~1% of the kept spans.
+      const Size freed = compactUnreferenced(ms1_traces, ms1_store, needed);
       writeLogInfo_("Released XICs of " + String(freed) + " unreferenced MS1 traces." + rss_());
     }
     writeLogInfo_(clk_() + " Detected " + String(ms1_traces.size()) + " MS1 traces -> " + String(precursors.size())

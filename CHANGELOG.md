@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Fixed
+- **MS1 arena compaction overwrote ~1% of precursor XICs.** The compaction that frees the profiles
+  of unreferenced MS1 traces walked the trace vector in container order with a monotone write
+  cursor, but the vector had been sorted by m/z after its spans were appended in detection order:
+  kept spans visited after the cursor had passed their offset were overwritten before they were
+  copied. Deterministic, so the thread-count digests never saw it. `compactUnreferenced()` walks
+  the kept spans in offset order and validates bounds and disjointness before moving a byte;
+  `-diag:selftest_arena` (e2e check 12) presents a fixture that defeats the old walk. Output changes
+  (the corrected profiles feed fragment scoring); the digest baselines are re-taken.
+- `bench/semantic_digest.py` missed a closing tag straddling a 4 MiB read boundary and accepted a
+  truncated spectrum list; the e2e digest returned the empty hash for a missing list. New
+  `bench/mzml_header_diff.py` compares everything outside the spectrum list (completion time masked).
 - **One isolation m/z acquired in two ion-mobility slices is two windows.** The PXD017703 "py3"
   scheme (9 of 27 acquisitions) acquires each m/z window in two window groups with shifted,
   overlapping scan ranges ~1.7 s apart. Keyed by m/z alone they collapsed into one window whose

@@ -16,7 +16,9 @@ END = b"</spectrumList>"
 def digest(path):
     h = hashlib.sha256()
     started = False
+    ended = False
     tail = b""
+    pending = b""
     with open(path, "rb") as f:
         while True:
             c = f.read(1 << 22)
@@ -32,14 +34,22 @@ def digest(path):
                 c = buf[i:]
             # stop at </spectrumList>: the trailing <indexList> holds byte OFFSETS, which shift with any
             # header-length change (a 4-byte longer <software> version stamp moved every offset and
-            # falsely flagged two spectrum-identical files as different, 2026-09-02)
-            j = c.find(END)
+            # falsely flagged two spectrum-identical files as different, 2026-09-02).
+            # The tag can straddle a chunk boundary: search the carry + chunk, hash everything but a
+            # tag-length carry, and keep that carry for the next chunk (review finding, 2026-09-06).
+            pending += c
+            j = pending.find(END)
             if j >= 0:
-                h.update(c[:j + len(END)])
+                h.update(pending[:j + len(END)])
+                ended = True
                 break
-            h.update(c)
+            keep = len(END) - 1
+            h.update(pending[:-keep])
+            pending = pending[-keep:]
     if not started:
         raise SystemExit(f"{path}: no {MARK!r} found")
+    if not ended:
+        raise SystemExit(f"{path}: {MARK!r} without {END!r}: truncated or not an mzML spectrum list")
     return h.hexdigest()
 if __name__ == "__main__":
     ds = [(p, digest(p)) for p in sys.argv[1:]]
