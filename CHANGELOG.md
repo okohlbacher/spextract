@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Changed
+- **Renamed to SpeXtractor** (the previous name was taken): executable, class, namespace, macros and
+  environment variables, source and test file names, CMake project and target, CI workflows, the
+  OpenMS patches and every document. The GitHub repositories moved with it; the old URLs redirect.
+
+### Added
+- **Third OpenMS patch: move operations for `MassTrace`.** The class declares a defaulted destructor
+  and copy operations, which suppresses the implicit moves, so every `std::move` of a mass trace --
+  in OpenMS's own vector growth and in the band and split gathering here -- deep-copied its points.
+  Two defaulted moves transfer instead; a `static_assert` on `is_nothrow_move_constructible` means a
+  tree without the patch does not build the tool.
+- **Memory and stage instrumentation**: allocator statistics (`mallinfo2`) at every milestone, so
+  free-but-retained memory is measured rather than inferred; the picked-MS1 peak count; per-window
+  seeds, parents to children, record and arena size and capacity; per-window stage seconds on every
+  exit of the window body; and an ordered slab digest under `SPEXTRACTOR_DET`.
+
 ### Fixed
 - **MS1 arena compaction overwrote ~1% of precursor XICs.** The compaction that frees the profiles
   of unreferenced MS1 traces walked the trace vector in container order with a monotone write

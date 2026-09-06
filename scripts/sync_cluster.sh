@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 NODE=${1:-ibminode05}
 SRC=src/spextractor.cpp
 REMOTE_SRC=/scratch/kohlbach/OpenMS/src/topp/spextractor.cpp
-if [ -n "$(git status --porcelain -- "$SRC" src/TdfMzCalibration.h)" ]; then
+if [ -n "$(git status --porcelain -- "$SRC" src/TdfMzCalibration.h src/TdfLoad.h src/MzPeakStreamLoad.h)" ]; then
   if [ "${2:-}" != "--allow-dirty" ]; then
     echo "REFUSED: $SRC has staged or unstaged changes. Commit first, or pass --allow-dirty." >&2; exit 1
   fi
@@ -21,11 +21,15 @@ else
 fi
 SHA=$(shasum -a 256 "$SRC" | cut -d' ' -f1)
 HDR_SHA=$(shasum -a 256 src/TdfMzCalibration.h | cut -d' ' -f1)
+HDRS_SHA=$(cat src/TdfLoad.h src/MzPeakStreamLoad.h | shasum -a 256 | cut -d' ' -f1)
 GITREV="$(git rev-parse --short HEAD)${DIRTY}"
 scp -q "$SRC" "$NODE":"${REMOTE_SRC}.new"
 # the calibration model is header-only and lives in THIS repo; the OpenMS patch includes it, so it
 # must travel with every deploy or the cluster build silently uses a stale copy
 scp -q src/TdfMzCalibration.h "$NODE":/scratch/kohlbach/OpenMS/src/openms/include/OpenMS/FORMAT/
+# The tool's other headers live next to its source in the OpenMS topp directory. They were copied by
+# hand once and then drifted: a rename left the cluster building against a stale TdfLoad.h. Sync them.
+scp -q src/TdfLoad.h src/MzPeakStreamLoad.h "$NODE":/scratch/kohlbach/OpenMS/src/topp/
 # Refuse to deploy into a tree that has lost the calibration patch: it would build fine, silently
 # revert masses to the -5..-11 ppm chord, and record a clean-looking provenance [kimi review].
 ssh "$NODE" "grep -q TdfMzCalibration /scratch/kohlbach/OpenMS/src/openms/source/FORMAT/BrukerTimsFile.cpp" || {
@@ -45,8 +49,9 @@ ssh "$NODE" "set -eu
   fi
   OMSVER=\$(grep -m1 CF_OPENMS_PACKAGE_VERSION_FULLSTRING CMakeCache.txt | cut -d= -f2)
   EPD=/scratch/kohlbach/OpenMS/src/openms/source/FEATUREFINDER/ElutionPeakDetection.cpp
-  { printf 'src_sha256=%s\ncalibration_header_sha256=$HDR_SHA\ngit=%s\nbuilt=%s\nbinary_sha256=%s\nopenms=%s\nepd_sha256=%s\nepd_patch_markers=%s\n' \
+  { printf 'src_sha256=%s\ncalibration_header_sha256=$HDR_SHA\ntool_headers_sha256=$HDRS_SHA\ngit=%s\nbuilt=%s\nbinary_sha256=%s\nopenms=%s\nepd_sha256=%s\nepd_patch_markers=%s\nmasstrace_move_markers=%s\nlibopenms_sha256=%s\n' \
       '$SHA' '$GITREV' \"\$(date -Is)\" \"\$(sha256sum bin/spextractor | cut -d' ' -f1)\" \
-      \"\$OMSVER\" \"\$(sha256sum \$EPD | cut -d' ' -f1)\" \"\$(grep -c 'SpeXtractor\|lock' \$EPD || true)\"
+      \"\$OMSVER\" \"\$(sha256sum \$EPD | cut -d' ' -f1)\" \"\$(grep -c 'SpeXtractor\|lock' \$EPD || true)\" \
+      \"\$(grep -c 'MassTrace(MassTrace &&)' /scratch/kohlbach/OpenMS/src/openms/include/OpenMS/KERNEL/MassTrace.h || true)\" \"\$(sha256sum lib/libOpenMS.so | cut -d' ' -f1)\"
   } > bin/spextractor.provenance.tmp && mv bin/spextractor.provenance.tmp bin/spextractor.provenance
   cat bin/spextractor.provenance | tee -a /scratch/kohlbach/deploys.log"
