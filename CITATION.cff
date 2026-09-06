@@ -5,7 +5,7 @@ type: software
 authors:
   - family-names: Kohlbacher
     given-names: Oliver
-repository-code: "https://github.com/okohlbacher/speXtractor"
+repository-code: "https://github.com/okohlbacher/spextractor"
 abstract: >-
   An open (BSD-3) extractor of pseudo-MS/MS spectra from Bruker timsTOF diaPASEF data, built on
   OpenMS, including an exact license-free TOF-to-m/z calibration derived from the acquisition's own
