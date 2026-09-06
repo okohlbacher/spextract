@@ -1,11 +1,11 @@
 # Window-loop audit — where the 3,805 s goes
 
-Scope: `src/spextract.cpp:1526-1720` (the `#pragma omp parallel for` over the 24 diaPASEF
+Scope: `src/spextractor.cpp:1526-1720` (the `#pragma omp parallel for` over the 24 diaPASEF
 isolation tiles) and everything it calls, including OpenMS
 (`<OpenMS>/src/openms/`).
 
 Every line reference below was checked against the working tree at `787441a`
-(`src/spextract.cpp`, 1,932 lines) and against the OpenMS source on this machine. Claims
+(`src/spextractor.cpp`, 1,932 lines) and against the OpenMS source on this machine. Claims
 are labelled **MEASURED** (a number that exists in a log) or **INFERRED** (derived from code
 structure plus arithmetic). The distinction is the point of this document: almost everything
 previously asserted about the inside of the window loop is inferred, and one widely repeated
@@ -151,7 +151,7 @@ and the 14.57/120 efficiency.
   outside the `IF_MASTERTHREAD` guard — one contended RMW on a single shared cache line by a
   120-thread team, ~8 M times per window.
 - **`ElutionPeakDetection`'s constructor calls `setLogType(CMD)`
-  (`ElutionPeakDetection.cpp:43`)** and `spextract.cpp:686` never silences it — unlike
+  (`ElutionPeakDetection.cpp:43`)** and `spextractor.cpp:686` never silences it — unlike
   `mtd.setLogType(ProgressLogger::NONE)` at `:584` ("quiet + thread-safe (called from the parallel
   window loop)") and `m2.setLogType` at `:655`. `startProgress`/`endProgress` mutate
   `ProgressLogger::recursion_depth_`, a **non-atomic `static int`**
@@ -174,7 +174,7 @@ the explanation.
 
 ### 2.4 The falsifying measurements — run these first
 
-1. **`grep Threads /proc/$(pgrep -f spextract)/status` during the window loop.**
+1. **`grep Threads /proc/$(pgrep -f spextractor)/status` during the window loop.**
    ~120 ⇒ this whole section is wrong. ~2,900 ⇒ confirmed. One command, decides everything.
    Note the log line at `:1504-1507` is **not** evidence either way: it prints
    `String(n_conc * n_bands) + " live threads"`, the tool's own arithmetic over the band loop,
@@ -199,7 +199,7 @@ tie-break, `std::sort` is not stable, and today's trace insertion order is alrea
 thread-schedule-dependent through the EPD critical — so the 10,072-peptide baseline is **not
 bit-reproducible today**.
 
-### OI-1 — Cap the nested EPD team. `src/spextract.cpp:686-716`. **← IMPLEMENTED**
+### OI-1 — Cap the nested EPD team. `src/spextractor.cpp:686-716`. **← IMPLEMENTED**
 
 **Change.** Immediately before the batch loop that calls `epd.detectPeaks`, and only when already
 inside a parallel region, set the *calling task's* `nthreads-var` to the same inner budget the
@@ -270,7 +270,7 @@ visibly from ~5.8 GB.
 **Blocker.** Requires rebuilding `libOpenMS`, not just the TOPP tool, so it is out of scope for
 the single-file build path used here.
 
-### OI-3 — Gate the `[merged-trace]` instrumentation. `src/spextract.cpp:721-737`
+### OI-3 — Gate the `[merged-trace]` instrumentation. `src/spextractor.cpp:721-737`
 
 **Change.** The block is guarded by `if (!mts.empty())` — **only the string assembly at `:734` is
 guarded by `span_log`**. So a full scan of every peak of every one of ~8 M traces, a 64 MB
@@ -288,7 +288,7 @@ Gating restores it — a *log* change, not an mzML change.
 
 **Falsifying measurement.** Any diff in the emitted mzML. There should be none.
 
-### OI-4 — SoA the RT gate. `src/spextract.cpp:1074-1075`, build at `:1574`
+### OI-4 — SoA the RT gate. `src/spextractor.cpp:1074-1075`, build at `:1574`
 
 **Change.** `:1074-1075` binds `const Trace& f` and reads **only `f.rt`** — 8 bytes at offset 8 of
 a 56-byte object — to reject ~99.7% of the IM band (`gate:delta_rt` 3.0 at `:488`, against a
@@ -315,7 +315,7 @@ better version packs the four scalars into a 32-byte SoA and drops `frag_traces`
 **Falsifying measurement.** mzML diff (should be empty); loop wall should move by ≤ 5%, so if it
 moves by 30% the model of where time goes is wrong.
 
-### OI-5 — Release `g.rt`'s capacity. `src/spextract.cpp:440-442`
+### OI-5 — Release `g.rt`'s capacity. `src/spextractor.cpp:440-442`
 
 **Change.** `g.rt` accumulates **every** XIC RT of every fragment — ~56 M doubles, unreserved
 (`total` is computed at `:447-448`, one line *after* the loop that needed it) — then `sort` +
@@ -342,7 +342,7 @@ runs at `:1579`, so the frame RTs would have to be snapshotted before `:1555`.
 word removes the second copy. Runs per band, i.e. 5× per window. Output-identical trivially.
 Requires a libOpenMS rebuild.
 
-### OI-7 — Reserve `frags` / `frag_scores`. `src/spextract.cpp:1166-1167`
+### OI-7 — Reserve `frags` / `frag_scores`. `src/spextractor.cpp:1166-1167`
 
 Genuinely unreserved and they grow past the 500 cap on 46.7-75.7% of spectra
 (`docs/merge-design.md:82-84`). `touched` at `:1043-1044` is *already* reserved — do not "fix" it.
@@ -358,7 +358,7 @@ caller-owned buffer instead of swapping. Minor.
 MSFragger confirm, per `docs/search-engine-policy.md`). Decision rule: progress = peptides
 ≥ 10,072 and PSMs/peptide not worse; regression = peptides fall ≥ 1%.
 
-### BC-1 — Band MS1 tracing. `src/spextract.cpp:1344-1346`
+### BC-1 — Band MS1 tracing. `src/spextractor.cpp:1344-1346`
 
 **Change.** `const int ms1_bands = std::max(1, getIntOption_("perf:trace_bands"));` — and
 `perf:trace_bands` defaults to **0** (`:545`), so this is `max(1,0) = 1`. **MS1 tracing is
@@ -381,7 +381,7 @@ monoisotope assignment. This is the *riskiest* place in the tool to perturb trac
 **Falsifier / gate.** dataset D peptides at 10,072 ± noise with `-perf:trace_bands N` for N ∈ {4, 8}.
 Note this option **cannot be tested in isolation** (see BC-3).
 
-### BC-2 — Fix the halo formula. `src/spextract.cpp:639`
+### BC-2 — Fix the halo formula. `src/spextractor.cpp:639`
 
 ```cpp
 const double h = edge[b] * ppm * 1e-6 * 20.0;
@@ -400,7 +400,7 @@ grow with band count.
 **Behaviour-changing** — it changes the trace set at that boundary. It is a correctness fix, so it
 should be gated but is expected to be neutral-to-positive.
 
-### BC-3 — Raise `perf:trace_bands`. `src/spextract.cpp:545`, `:1344`, `:1489`
+### BC-3 — Raise `perf:trace_bands`. `src/spextractor.cpp:545`, `:1344`, `:1489`
 
 **Not a single-axis experiment.** The same option feeds `:1344`, so `-perf:trace_bands 30`
 simultaneously flips MS1 tracing from 1 band to 30. Any measurement of it is BC-1 and BC-3 fired
@@ -418,7 +418,7 @@ with the number of boundaries — roughly 0.08% of peaks at b=5 and **~0.6% at b
 < 3 spectra; `:626-627` can emit duplicate quantile edges on tied m/z, producing an empty band.
 The throw is captured at `:1529` and rethrown, killing the run. Probability rises with band count.
 
-### BC-4 — Rebalance the window loop. `src/spextract.cpp:1497`, `:1526`
+### BC-4 — Rebalance the window loop. `src/spextractor.cpp:1497`, `:1526`
 
 24 iterations on 24 threads with `schedule(dynamic)` is a static one-to-one map with zero
 balancing headroom; `n_bands` is frozen at 5 before the loop; nothing rebalances. Window wall time
@@ -433,7 +433,7 @@ cores", "87 cores of kernel time in the first 322 s" — is downstream of that o
 parameter `f` that was *solved* to reproduce the measurement it is then said to predict. Do not
 plan against those figures.
 
-### BC-5 — Add an index tie-break to the canonical trace sort. `src/spextract.cpp:1568-1573`
+### BC-5 — Add an index tie-break to the canonical trace sort. `src/spextractor.cpp:1568-1573`
 
 The comparator is `(im, mz, rt, intensity)` with no final tie-break, and `std::sort` is unstable.
 It is therefore **not a total order**, and the run is not bit-reproducible today. Adding a stable

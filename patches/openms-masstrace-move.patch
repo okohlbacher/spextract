@@ -1,0 +1,27 @@
+# SpeXtractor: give OpenMS MassTrace move operations.
+#
+# MassTrace declares a defaulted destructor, copy constructor and copy assignment, which suppresses
+# the implicit move operations: every std::move of a MassTrace -- in MassTraceDetection's and
+# ElutionPeakDetection's own vector growth and in SpeXtractor's band/split gathering -- was a deep
+# copy of trace_peaks_ (24 B/point) and smoothed_intensities_ (8 B/point). Two defaulted moves make
+# those transfers; the values are bitwise the same, so the output is identical. SpeXtractor
+# static_asserts std::is_nothrow_move_constructible<MassTrace>, so a tree without this patch does
+# not build the tool.
+#
+# Base: OpenMS/OpenMS develop bd4b89555629d68b431b189a4c841efbcc4dfeea (2026-04-24).
+# Apply from the OpenMS tree root: patch -p1 -N < openms-masstrace-move.patch
+--- a/src/openms/include/OpenMS/KERNEL/MassTrace.h
++++ b/src/openms/include/OpenMS/KERNEL/MassTrace.h
+@@ -70,6 +70,12 @@
+ 
+     /// Assignment operator
+     MassTrace & operator=(const MassTrace &) = default;
++
++    /// Move operations (SpeXtractor patch). The defaulted destructor and copy operations above
++    /// suppress the implicit moves, so every std::move of a MassTrace was a deep copy of
++    /// trace_peaks_ and smoothed_intensities_; deduced noexcept, since every member is nothrow-movable.
++    MassTrace(MassTrace &&) = default;
++    MassTrace & operator=(MassTrace &&) = default;
+ 
+     /// Random access operator
+     PeakType& operator[](const Size & mt_idx);

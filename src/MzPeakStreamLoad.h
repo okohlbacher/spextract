@@ -1,4 +1,4 @@
-// SpeXtract: streaming diaPASEF load from an .mzpeak archive through the mzPeak C++ library
+// SpeXtractor: streaming diaPASEF load from an .mzpeak archive through the mzPeak C++ library
 // (github.com/OpenMS/mzpeak, fork okohlbacher/mzpeak-openms). Mirrors BrukerTimsFile::
 // loadDIAStreaming's contract so PickCompactConsumer sees the same stream: every MS1 spectrum
 // first (frame order), then one MSSpectrum per (MS2 frame, isolation window) holding only the
@@ -12,7 +12,7 @@
 // ponytail: decode is parallel over contiguous frame ranges with one Index per thread (decodes
 // serialise on a reader's mutex); the hand-off is serial. No caching beyond the library's own.
 #pragma once
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
 
 #include "TdfLoad.h"
 #include <mzpeak/open.h>
@@ -23,7 +23,7 @@
 
 // [D1 exact m/z] the archive stores raw TOF behind a two-point transform; the exact ModelType-1 calibration
 // lives only in the embedded vendor/analysis.tdf.gz. Recover tof = round((sqrt(mz) - c0) / c1) and re-apply
-// TdfMzCalibration per frame. ON BY DEFAULT and fail-closed; SPEXTRACT_MZPEAK_EXACT=0 disables it and
+// TdfMzCalibration per frame. ON BY DEFAULT and fail-closed; SPEXTRACTOR_MZPEAK_EXACT=0 disables it and
 // falls back to the archive's two-point transform, which costs ~12% of identified peptides.
 #include <OpenMS/FORMAT/TdfMzCalibration.h>   // installed by the OpenMS patch (same header as src/TdfMzCalibration.h)
 #include <zip.h>
@@ -69,7 +69,7 @@ namespace spx
   struct MzPeakExactMz
   {
     double c0 = 0, c1 = 0;
-    spextract::TdfMzCalibration cal;
+    spextractor::TdfMzCalibration cal;
     std::vector<double> t1_by_frame;          // index = Frames.Id
     bool enabled = false;
 
@@ -117,11 +117,11 @@ namespace spx
         if (std::sscanf(tp->c_str(), "%lf,%lf", &c0, &c1) != 2 || !(c1 > 0)) throw std::runtime_error("mzpeak: bad transform_params " + *tp);
 
         // (2) the vendor tdf: gunzip vendor/analysis.tdf.gz to a temp file, read MzCalibration + Frames.T1
-        // --no-vendor archives have no embedded tdf: accept a sidecar via SPEXTRACT_MZPEAK_TDF=<analysis.tdf.gz>
+        // --no-vendor archives have no embedded tdf: accept a sidecar via SPEXTRACTOR_MZPEAK_TDF=<analysis.tdf.gz>
         std::vector<char> gz;
-        if (const char* side = std::getenv("SPEXTRACT_MZPEAK_TDF"))
+        if (const char* side = std::getenv("SPEXTRACTOR_MZPEAK_TDF"))
         {
-          FILE* sf = std::fopen(side, "rb"); if (!sf) throw std::runtime_error(std::string("mzpeak: cannot read SPEXTRACT_MZPEAK_TDF ") + side);
+          FILE* sf = std::fopen(side, "rb"); if (!sf) throw std::runtime_error(std::string("mzpeak: cannot read SPEXTRACTOR_MZPEAK_TDF ") + side);
           char b[1 << 16]; size_t n; while ((n = std::fread(b, 1, sizeof b, sf)) > 0) gz.insert(gz.end(), b, b + n); std::fclose(sf);
         }
         else gz = readMember_(z, "vendor/analysis.tdf.gz");
@@ -134,7 +134,7 @@ namespace spx
                std::fwrite(ob.data(), 1, ob.size() - zs.avail_out, out); } while (rc != Z_STREAM_END);
           inflateEnd(&zs); std::fclose(out); }
         { std::string why;
-          if (!spextract::loadTdfCalibration(std::string(tmpl), cal, t1_by_frame, why))
+          if (!spextractor::loadTdfCalibration(std::string(tmpl), cal, t1_by_frame, why))
             throw std::runtime_error("mzpeak: " + why); }
         std::remove(tmpl);
         enabled = true;
@@ -251,16 +251,16 @@ namespace spx
     std::unique_ptr<MzPeakExactMz> exact;
     // DEFAULT ON (2026-09-02 18:58): with the exact model recovered from the tdf, mzPeak input gives 12,082 Sage
     // peptides vs 10,785 with the archive's two-point transform (and 12,217 from .d): the transform was 91% of the
-    // loss. Fail closed like the .d path: no tdf (embedded or SPEXTRACT_MZPEAK_TDF sidecar) -> error, unless
-    // SPEXTRACT_MZPEAK_EXACT=0 explicitly accepts the two-point m/z.
-    const char* ex = std::getenv("SPEXTRACT_MZPEAK_EXACT");
+    // loss. Fail closed like the .d path: no tdf (embedded or SPEXTRACTOR_MZPEAK_TDF sidecar) -> error, unless
+    // SPEXTRACTOR_MZPEAK_EXACT=0 explicitly accepts the two-point m/z.
+    const char* ex = std::getenv("SPEXTRACTOR_MZPEAK_EXACT");
     if (!(ex && std::string(ex) == "0"))
     {
       try { exact = std::make_unique<MzPeakExactMz>(path); }
       catch (const std::exception& e)
       {
         throw OpenMS::Exception::InvalidValue(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
-          std::string("mzPeak input: cannot recover the exact TDF calibration (") + e.what() + "). The archive's two-point transform is ~7 ppm off and costs ~12% peptides; set SPEXTRACT_MZPEAK_TDF=<analysis.tdf.gz> or SPEXTRACT_MZPEAK_EXACT=0 to accept it.", path);
+          std::string("mzPeak input: cannot recover the exact TDF calibration (") + e.what() + "). The archive's two-point transform is ~7 ppm off and costs ~12% peptides; set SPEXTRACTOR_MZPEAK_TDF=<analysis.tdf.gz> or SPEXTRACTOR_MZPEAK_EXACT=0 to accept it.", path);
       }
       lastMzPeakCalibration() = "tdf_table_modeltype1 (recovered from the archive's two-point transform + embedded vendor/analysis.tdf.gz) archive=" + path.substr(path.find_last_of('/') + 1);
     }
@@ -361,4 +361,4 @@ namespace spx
     return ms1.size() + ms2.size();
   }
 } // namespace spx
-#endif // SPEXTRACT_WITH_MZPEAK
+#endif // SPEXTRACTOR_WITH_MZPEAK

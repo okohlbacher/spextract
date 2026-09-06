@@ -1,5 +1,5 @@
 #!/bin/bash
-# Apply SpeXtract's OpenMS patches to an OpenMS source tree and install the shared calibration header.
+# Apply SpeXtractor's OpenMS patches to an OpenMS source tree and install the shared calibration header.
 #
 # WITHOUT these patches the tool builds and runs, but the Bruker .d reader falls back to a two-point
 # linear-in-sqrt TOF->m/z chord that is -5..-11 ppm biased on the files we measured -- which costs
@@ -30,5 +30,5 @@ for p in patches/*.patch; do
     echo "FAILED to apply $p -- the tree may be a different OpenMS version" >&2; exit 1
   fi
 done
-echo "done. Rebuild the spextract target, then verify the run log says:"
+echo "done. Rebuild the spextractor target, then verify the run log says:"
 echo "  TOF m/z calibration: TDF MzCalibration table model (exact, license-free)"

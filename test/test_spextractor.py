@@ -20,7 +20,7 @@ These exercise the default (OpenMS) detector only. `trace:detector=integer` refu
 without the vendor flight-time calibration, which a synthetic mzML cannot carry, so it is judged on
 real data in the benchmark harness and not here.
 
-Usage: test_spextract.py /path/to/spextract [workdir]
+Usage: test_spextractor.py /path/to/spextractor [workdir]
 Exit status is 0 only if every check passes.
 """
 import base64, hashlib, os, re, struct, subprocess, sys, tempfile
@@ -107,10 +107,10 @@ def synth(path, n_cycles=14, cycle_s=1.4, gap_cycles=(), groups=None):
                               prec=win, group=groups[c % 2] if groups else 0)); idx += 1
     body = "\n".join(specs)
     open(path, "w").write(f"""<?xml version="1.0" encoding="ISO-8859-1"?>
-<indexedmzML xmlns="http://psi.hupo.org/ms/mzml"><mzML version="1.1.0" id="spextract_test">
+<indexedmzML xmlns="http://psi.hupo.org/ms/mzml"><mzML version="1.1.0" id="spextractor_test">
 <cvList count="1"><cv id="MS" fullName="Proteomics Standards Initiative Mass Spectrometry Ontology" URI="https://raw.githubusercontent.com/HUPO-PSI/psi-ms-CV/master/psi-ms.obo"/></cvList>
 <fileDescription><fileContent><cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum"/></fileContent></fileDescription>
-<softwareList count="1"><software id="so_test" version="0"><cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="spextract-test"/></software></softwareList>
+<softwareList count="1"><software id="so_test" version="0"><cvParam cvRef="MS" accession="MS:1000799" name="custom unreleased software tool" value="spextractor-test"/></software></softwareList>
 <instrumentConfigurationList count="1"><instrumentConfiguration id="ic_test"><cvParam cvRef="MS" accession="MS:1000031" name="instrument model"/></instrumentConfiguration></instrumentConfigurationList>
 <dataProcessingList count="1"><dataProcessing id="dp_test"><processingMethod order="0" softwareRef="so_test"><cvParam cvRef="MS" accession="MS:1000544" name="Conversion to mzML"/></processingMethod></dataProcessing></dataProcessingList>
 <run id="run_test" defaultInstrumentConfigurationRef="ic_test">
@@ -216,7 +216,7 @@ def digest(mzml):
 def main():
     if len(sys.argv) < 2: sys.exit(__doc__)
     binary = sys.argv[1]
-    work = sys.argv[2] if len(sys.argv) > 2 else tempfile.mkdtemp(prefix="spextract_test_")
+    work = sys.argv[2] if len(sys.argv) > 2 else tempfile.mkdtemp(prefix="spextractor_test_")
     os.makedirs(work, exist_ok=True)
     inp = os.path.join(work, "synth.mzML")
     z2_mono, z1_mono = synth(inp)
@@ -312,7 +312,7 @@ def main():
     def c9():
         tdf = synth_tdf(os.path.join(work, "analysis.tdf"), n_frames=64)
         out_i = os.path.join(work, "integer.mzML")
-        env = dict(os.environ, SPEXTRACT_MZPEAK_TDF=tdf)
+        env = dict(os.environ, SPEXTRACTOR_MZPEAK_TDF=tdf)
         run(binary, inp, out_i, env=env)
         got = detector_of(out_i)
         assert got == "integer", (

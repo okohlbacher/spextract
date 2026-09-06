@@ -50,7 +50,7 @@
 
 ### Benchmark, all six datasets, shipped defaults only
 
-`spextract -in <file>.d -out pseudo.mzML -threads 100` and nothing else:
+`spextractor -in <file>.d -out pseudo.mzML -threads 100` and nothing else:
 
 | file | spectra | wall | peak RSS | Sage @1% | MSFragger @1% |
 |---|---|---|---|---|---|
@@ -164,7 +164,7 @@ three files; that was load drift on shared nodes and is withdrawn. Do not cite a
   correlation grid, which was a second copy of every profile, is gone. Window-loop memory falls from
   a 68.6 GB simultaneous peak to 27.9 GB (integer) / 32.4 GB (OpenMS); process peak RSS 105 -> 88 GB
   and 164 -> 147 GB.
-- **The `SPEXTRACT_MEM_LEDGER` byte ledger has been REMOVED** (it was temporary scaffolding for the
+- **The `SPEXTRACTOR_MEM_LEDGER` byte ledger has been REMOVED** (it was temporary scaffolding for the
   memory work above and is gone as of the round-2 changes; ~86 lines). While it existed it was
   corrected twice: the trace line had been cumulative rather than a peak, and a 6.0 GB
   `list<Peak2D>` line was a phantom (that list is per trace and dies each iteration). The structural
@@ -213,11 +213,11 @@ three files; that was load drift on shared nodes and is withdrawn. Do not cite a
 - An unused per-window band-count heuristic that a comment described as kept for reference.
 
 ### Runtime
-- **MS1 path parallelised** (loader `[SpeXtract ms1-par]`: batched parallel MS1 decode with per-thread ZSTD contexts and
+- **MS1 path parallelised** (loader `[SpeXtractor ms1-par]`: batched parallel MS1 decode with per-thread ZSTD contexts and
   `FrameCentroider`, ordered hand-off; consumer `flushMS1_`: parallel MS1 pick). dataset D/100 threads: LOAD 445 s -> 39 s,
   total 22:22 -> **15:21**; spectrum data byte-identical, Sage peptide set identical.
-- Decode-once frame-major parallel MS2 loader (`[SpeXtract par-load]`), batched parallel MS2 pick; per-phase `[perf]`
-  table and `[perf-load]` decode/hand-off/pick timers; `SPEXTRACT_LOAD_ONLY=1` for load-only profiling.
+- Decode-once frame-major parallel MS2 loader (`[SpeXtractor par-load]`), batched parallel MS2 pick; per-phase `[perf]`
+  table and `[perf-load]` decode/hand-off/pick timers; `SPEXTRACTOR_LOAD_ONLY=1` for load-only profiling.
 - Falsified and recorded: `MALLOC_ARENA_MAX=4` (10x slower at 100 threads), loader batch depth (64/256/1024 flat).
 
 ### Input
@@ -238,17 +238,17 @@ three files; that was load drift on shared nodes and is withdrawn. Do not cite a
 - **E5:** `apportion` and `rp_max` now go through the same emitted-intensity weights as the default path
   (`weighted_()`); they had silently bypassed `corr_power`/`im_weight`, so every earlier A/B of those flags was
   confounded. First clean apportion run: -3.9% peptides (falsified again; NNLS cut).
-- **Reported m/z of every trace is now the APEX member's m/z** (`SPEXTRACT_MZ_ESTIMATOR=apex`, the new default;
+- **Reported m/z of every trace is now the APEX member's m/z** (`SPEXTRACTOR_MZ_ESTIMATOR=apex`, the new default;
   `mean` restores the OpenMS intensity-weighted centroid): dataset D +2.6% Sage (12,537 vs 12,217) and +4.1% MSFragger
   (11,927 vs 11,463) with the paired precursor mass error vs the reference implementation +1.12 -> +0.78 ppm. Both-engines gate passed;
   generalises: dataset A +4.4% (10,789), dataset B +2.7% (10,156); mean ratio vs the reference implementation on Sage 105.1% -> 109.2%;
   entrapment of the apex arm 1.28% [1.03-1.53] at nominal 1%.
-- Under test (env switches, defaults unchanged): `SPEXTRACT_PICK_MZ_MODE=seed|top3` (pick-level m/z; the -2.4 ppm
-  fragment offset vs the reference implementation is upstream of the trace estimator), `SPEXTRACT_DROP_PREC_ISO=1` (drop the precursor's
-  M+1..M+3 from fragment lists; 28%/25% of spectra carried them -- FALSIFIED, -2.3%, keep off), `SPEXTRACT_MZPEAK_EXACT` (now the default; `=0` accepts the two-point m/z),
-  `SPEXTRACT_MIN_ISOTOPES=k` (precursor gate by envelope depth; k=3 = -39% emission, -23% wall, MSFragger -0.9%, Sage -6.4%),
-  `SPEXTRACT_PRECURSOR_LIST=<tsv>` (emit only precursors matching a reference list), `SPEXTRACT_BACKFILL_RAW=N` /
-  `SPEXTRACT_BACKFILL_MAXFRAGS=K` (add the N most intense untraced raw peaks of the apex frame inside the IM band:
+- Under test (env switches, defaults unchanged): `SPEXTRACTOR_PICK_MZ_MODE=seed|top3` (pick-level m/z; the -2.4 ppm
+  fragment offset vs the reference implementation is upstream of the trace estimator), `SPEXTRACTOR_DROP_PREC_ISO=1` (drop the precursor's
+  M+1..M+3 from fragment lists; 28%/25% of spectra carried them -- FALSIFIED, -2.3%, keep off), `SPEXTRACTOR_MZPEAK_EXACT` (now the default; `=0` accepts the two-point m/z),
+  `SPEXTRACTOR_MIN_ISOTOPES=k` (precursor gate by envelope depth; k=3 = -39% emission, -23% wall, MSFragger -0.9%, Sage -6.4%),
+  `SPEXTRACTOR_PRECURSOR_LIST=<tsv>` (emit only precursors matching a reference list), `SPEXTRACTOR_BACKFILL_RAW=N` /
+  `SPEXTRACTOR_BACKFILL_MAXFRAGS=K` (add the N most intense untraced raw peaks of the apex frame inside the IM band:
   N=50 lifts MSFragger to 90% of the reference implementation at -2.6% Sage; faint-tail-only variant under test).
 - Output-identical: band partition by binary search (R3), early skip of fragments below `min_corr_pts` support.
 - Help texts of falsified flags (`rp_max`, `consolidate`, `merge`) now say so; `charge:iso_im_tolerance` help
@@ -298,13 +298,13 @@ handicap rather than establishing a lead.
 | Sage peptides @1% FDR | 11,976 | 10,333 | 9,891 | mean 105.1%, 95% CI [93.0, 117.3] -- consistent with PARITY |
 | MSFragger peptidoforms @1% | 11,463 | 11,465 | 9,404 | mean 85.0%, 95% CI [76.7, 93.2] -- a supported DEFICIT |
 | median precursor mass error | +1.5 | +3.2 | +2.3 ppm | the reference implementation -1.4 / +0.3 / -0.6 |
-SpeXtract also emits ~1.32x more spectra, so per-spectrum efficiency favours the reference implementation. The MSFragger
+SpeXtractor also emits ~1.32x more spectra, so per-spectrum efficiency favours the reference implementation. The MSFragger
 gap survives perfect masses and is therefore search/detection-side.
 
 ### Safety
 - **Fails closed.** ModelType != 1, `C2 <= 0` (a NULL/text C2 reads as 0.0 and selects the known-bad
   pure-sqrt law), `dC2`/`C3`/`C4` != 0, implausible `C1`, NaN, multi-row tables, or an unreadable
-  `Frames.T1` are all errors, not silent approximations. `SPEXTRACT_ALLOW_CHORD_FALLBACK=1` (exactly
+  `Frames.T1` are all errors, not silent approximations. `SPEXTRACTOR_ALLOW_CHORD_FALLBACK=1` (exactly
   "1") opts back into the biased chord.
 - **Provenance.** Every emitted mzML records `spx:mz_calibration` =
   `tdf_table_modeltype1` | `bruker_sdk` | `legacy_chord_APPROXIMATE`, via an exported accessor that

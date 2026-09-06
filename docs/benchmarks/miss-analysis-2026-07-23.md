@@ -70,7 +70,7 @@ work this project did, the misses are notably *not* a charge problem.
 
 The 51.8% "miss" decomposes into two very different populations:
 1. **~40% are DDA's weak IDs** — borderline peptides near DDA's own FDR edge, which are not a
-   SpeXtract failure so much as a difference in what the two acquisitions confirm.
+   SpeXtractor failure so much as a difference in what the two acquisitions confirm.
 2. **A real gap on long, high-mass peptides** (6x at length 20+, 4x at m/z 900+) — the extraction
    genuinely struggles to build clean spectra for large peptides.
 

@@ -1,4 +1,4 @@
-# SpeXtract: vendor m/z calibration for the Bruker timsTOF reader.
+# SpeXtractor: vendor m/z calibration for the Bruker timsTOF reader.
 #
 # Without this the reader converts flight time to m/z with a two-point linear-in-sqrt chord that is
 # -5 to -11 ppm biased (m/z dependent), costing roughly 6-11% of closed-search peptide
@@ -16,7 +16,7 @@
                            const Config& config);
  
      /// Load entire .d directory into MSExperiment
-+    /// [speXtract] Which TOF->m/z calibration the most recent load used:
++    /// [speXtractor] Which TOF->m/z calibration the most recent load used:
 +    /// "tdf_table_modeltype1" | "bruker_sdk" | "legacy_chord_APPROXIMATE" | "unset".
 +    /// Exported from libOpenMS on purpose: a header-inline static would be duplicated across the
 +    /// DSO boundary (OpenMS builds with hidden visibility), so the caller would read its own copy
@@ -48,11 +48,11 @@
      }
    }
 +
-+// [speXtract table-mz] License-free EXACT TOF->m/z from the TDF MzCalibration table.
-+// The MODEL lives in speXtract's own repo (src/TdfMzCalibration.h, BSD-3, copied here by
++// [speXtractor table-mz] License-free EXACT TOF->m/z from the TDF MzCalibration table.
++// The MODEL lives in speXtractor's own repo (src/TdfMzCalibration.h, BSD-3, copied here by
 +// scripts/sync_cluster.sh) so the shipped code is the code the C++ unit test exercises.
 +// Fails CLOSED: an unsupported calibration (ModelType != 1, dC2 != 0, multi-row table) throws
-+// rather than silently using the -5..-11 ppm chord. SPEXTRACT_ALLOW_CHORD_FALLBACK=1 opts back in.
++// rather than silently using the -5..-11 ppm chord. SPEXTRACTOR_ALLOW_CHORD_FALLBACK=1 opts back in.
 +#include <sqlite3.h>
 +#include <OpenMS/FORMAT/TdfMzCalibration.h>
 +namespace {
@@ -61,7 +61,7 @@
 +std::string g_mz_calibration = "unset";
 +class TdfTableTof2MzConverter final : public Tof2MzConverter
 +{
-+  spextract::TdfMzCalibration cal_;
++  spextractor::TdfMzCalibration cal_;
 +  std::vector<double> frame_t1_;
 +public:
 +  explicit TdfTableTof2MzConverter(const std::string& d_dir)
@@ -161,7 +161,7 @@
              BrukerScan2InvIonMobilityConverterFactory::instance(sdk_path)
                .produce(*handle, pcs);
 -          OPENMS_LOG_INFO << "TIMS calibration: Bruker SDK"
-+          // [speXtract sdk-mz] The SDK branch previously upgraded ONLY the ion-mobility converter,
++          // [speXtractor sdk-mz] The SDK branch previously upgraded ONLY the ion-mobility converter,
 +          // leaving m/z on the linear-in-sqrt two-point baseline -- measured -5..-11 ppm low across
 +          // the acquisition range (median -8.3 ppm on identified peptides vs the vendor conversion).
 +          // Swap the m/z converter too: tims_index_to_mz applies Bruker`s full per-frame calibration.
@@ -176,7 +176,7 @@
        }
      }
  
-+    // 2b. [speXtract table-mz] EXACT license-free m/z from the MzCalibration table.
++    // 2b. [speXtractor table-mz] EXACT license-free m/z from the MzCalibration table.
 +    // Gated on strategy: an explicit LINEAR request must still get the linear chord (otherwise we
 +    // silently override the user AND step 4 logs 'linear (GlobalMetadata)', which would be false).
 +    // (Only where the SDK did not already install a vendor m/z converter -- that path returns early.)
@@ -192,19 +192,19 @@
 +    {
 +      // FAIL CLOSED: the legacy chord is -5..-11 ppm wrong; emitting that silently is the defect
 +      // this converter exists to remove, so an unusable calibration is an error, not a warning.
-+      const char* allow_env = std::getenv("SPEXTRACT_ALLOW_CHORD_FALLBACK");
++      const char* allow_env = std::getenv("SPEXTRACTOR_ALLOW_CHORD_FALLBACK");
 +      // Only an explicit "1" opts in: getenv() != nullptr would treat
-+      // SPEXTRACT_ALLOW_CHORD_FALLBACK=0 (and "") as ENABLE, defeating the whole point.
++      // SPEXTRACTOR_ALLOW_CHORD_FALLBACK=0 (and "") as ENABLE, defeating the whole point.
 +      if (allow_env == nullptr || std::string(allow_env) != "1")
 +      {
 +        throw Exception::FileNotReadable(__FILE__, __LINE__, OPENMS_PRETTY_FUNCTION,
 +          String("exact TOF->m/z calibration unavailable (") + e.what() +
 +          "). The legacy linear-in-sqrt fallback is -5..-11 ppm biased; set "
-+          "SPEXTRACT_ALLOW_CHORD_FALLBACK=1 to use it anyway.");
++          "SPEXTRACTOR_ALLOW_CHORD_FALLBACK=1 to use it anyway.");
 +      }
 +      g_mz_calibration = "legacy_chord_APPROXIMATE";
 +      OPENMS_LOG_WARN << "TDF table m/z model unavailable (" << e.what()
-+                      << "); SPEXTRACT_ALLOW_CHORD_FALLBACK=1 -> linear-in-sqrt approximation"
++                      << "); SPEXTRACTOR_ALLOW_CHORD_FALLBACK=1 -> linear-in-sqrt approximation"
 +                      << " (-5..-11 ppm bias)" << std::endl;
 +    }
 +    }  // end strategy gate
@@ -287,11 +287,11 @@
 +    }
 +    else
 +    {
-+      // [speXtract ms1-par] MS1 is 4% of the frames but 37% of the peaks; decoding + building it
++      // [speXtractor ms1-par] MS1 is 4% of the frames but 37% of the peaks; decoding + building it
 +      // serially was ~425 s of LOAD (MS2 decode: 4 s). Same recipe as the MS2 block below.
 +      const size_t mb = 64;
 +      static const bool par_ok_ms1 = (g_mz_calibration.find("sdk") == std::string::npos)
-+                                     || std::getenv("SPEXTRACT_SDK_PARALLEL") != nullptr;
++                                     || std::getenv("SPEXTRACTOR_SDK_PARALLEL") != nullptr;
 +      int nthr = 1;
 +#ifdef _OPENMP
 +      nthr = std::max(1, omp_get_max_threads());
@@ -360,7 +360,7 @@
      startProgress(0, total_work, "Streaming DIA-PASEF MS2 frames");
      Size progress_count = 0;
  
-+    // [speXtract par-load] FRAME-MAJOR, PARALLEL, DECODE-ONCE.
++    // [speXtractor par-load] FRAME-MAJOR, PARALLEL, DECODE-ONCE.
 +    //
 +    // The original loop was window-major: for each window of a group, for each frame, decode the
 +    // frame. In diaPASEF every group has several windows (2 on the files measured), so each
@@ -372,10 +372,10 @@
 +    // uses itself). Spectra are handed to the consumer serially in (frame, window) order, so a
 +    // consumer that routes by window sees each window's frames in the same ascending order as
 +    // before: the compact store, and hence the output, is unchanged.
-+    // Batch size via SPEXTRACT_LOAD_BATCH (default 256): ponytail -- an env var until a
++    // Batch size via SPEXTRACTOR_LOAD_BATCH (default 256): ponytail -- an env var until a
 +    // measurement says it deserves a Config field.
 +    size_t batch = 256;
-+    if (const char* e = std::getenv("SPEXTRACT_LOAD_BATCH")) { const long v = std::atol(e); if (v > 0) batch = (size_t)v; }
++    if (const char* e = std::getenv("SPEXTRACTOR_LOAD_BATCH")) { const long v = std::atol(e); if (v > 0) batch = (size_t)v; }
 +
      for (const auto& [group, frame_ids] : group_to_frames)
      {
@@ -396,7 +396,7 @@
 +        // chunk 1: chunk 4 over a 256-frame batch made 64 chunks = 64 workers (codex, plan review).
 +        // The vendor SDK converter's thread-safety is not vouched for here -> serial unless opted in.
 +        static const bool par_ok = (g_mz_calibration.find("sdk") == std::string::npos)
-+                                   || std::getenv("SPEXTRACT_SDK_PARALLEL") != nullptr;
++                                   || std::getenv("SPEXTRACTOR_SDK_PARALLEL") != nullptr;
 +        const auto _t0 = std::chrono::steady_clock::now();
 +        std::exception_ptr load_err;
 +        #pragma omp parallel for schedule(dynamic, 1) if(par_ok)
@@ -550,7 +550,7 @@
      int sgolay_polynomial_order_{3};
      double ppm_tolerance_cluster_{50.0};
      double im_tolerance_cluster_{0.1};
-+    std::string mz_mode_{"weighted"};   // [speXtract pick-mz] weighted | seed | top3
++    std::string mz_mode_{"weighted"};   // [speXtractor pick-mz] weighted | seed | top3
  
      double ppm_tolerance_elution_{50.0};
  
@@ -560,7 +560,7 @@
        // --- PickIMCluster parameters ---
        defaults_.setValue("pickIMCluster:ppm_tolerance_cluster", 50.0, "m/z tolerance in ppm for clustering");
        defaults_.setValue("pickIMCluster:im_tolerance_cluster", 0.1, "Ion mobility tolerance for clustering (in 1/K0 units). For CCS data, use larger values (e.g., 10-20).");
-+      defaults_.setValue("pickIMCluster:mz_mode", "weighted", "[speXtract pick-mz] reported m/z of a cluster: weighted (intensity-weighted mean, default) | seed (most intense point) | top3 (weighted mean of the 3 most intense points)");
++      defaults_.setValue("pickIMCluster:mz_mode", "weighted", "[speXtractor pick-mz] reported m/z of a cluster: weighted (intensity-weighted mean, default) | seed (most intense point) | top3 (weighted mean of the 3 most intense points)");
 +      defaults_.setValidStrings("pickIMCluster:mz_mode", {"weighted", "seed", "top3"});
        // --- PickIMElutionProfiles parameters ---
        defaults_.setValue("pickIMElutionProfiles:ppm_tolerance_elution", 50.0, "Mass trace m/z tolerance in ppm");
@@ -569,7 +569,7 @@
  
        ppm_tolerance_cluster_ = (double)param_.getValue("pickIMCluster:ppm_tolerance_cluster");
        im_tolerance_cluster_ = (double)param_.getValue("pickIMCluster:im_tolerance_cluster");
-+      mz_mode_ = param_.getValue("pickIMCluster:mz_mode").toString();   // [speXtract pick-mz]
++      mz_mode_ = param_.getValue("pickIMCluster:mz_mode").toString();   // [speXtractor pick-mz]
  
        ppm_tolerance_elution_ = (double)param_.getValue("pickIMElutionProfiles:ppm_tolerance_elution");
  
@@ -577,7 +577,7 @@
            }
  
            if (sum_intensity > std::numeric_limits<double>::epsilon()) {
-+            double out_mz = sum_mz_intensity / sum_intensity;   // [speXtract pick-mz]
++            double out_mz = sum_mz_intensity / sum_intensity;   // [speXtractor pick-mz]
 +            if (mz_mode_ == "seed") out_mz = points[seed_original_idx].mz;
 +            else if (mz_mode_ == "top3")
 +            {

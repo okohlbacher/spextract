@@ -14,7 +14,7 @@ title: "co-elution gate, STRICT direction: the loosening sweep's derivative says
 # A PSM-only gain does NOT count: peptides at peptide_q<=0.01 is the metric, since we already
 # over-produce PSMs 8.98/peptide vs the reference implementation's 1.66.
 samples: [dataset D]
-binary: /path/to/scratch/rv/opt/bin/spextract
+binary: /path/to/scratch/rv/opt/bin/spextractor
 threads: 128
 arms:
   - name: base

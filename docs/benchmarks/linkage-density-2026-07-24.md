@@ -132,7 +132,7 @@ against the source. The **measurements stand; several interpretive claims do not
    `sage_deiso.json` (`docs/dataset D-BASELINE.md`). Calling 90,159 the "reference" for a `sage_deiso`
    base arm was wrong. All linkage rates are `sage_closed_s30.json`; re-run on the base arm's
    `sage_deiso` pair when the cluster returns.
-3. **`max_fragments` falsification not airtight (codex #6).** SpeXtract ranks the top-500 by
+3. **`max_fragments` falsification not airtight (codex #6).** SpeXtractor ranks the top-500 by
    CORRELATION (`assembleFromList_`, `frag_scores`=Pearson `c`); Sage ranks its top-150 by
    INTENSITY. Different criteria, so raising `max_fragments` CAN change Sage's top-150. Corrected:
    the effect is untested and directionally unknown (added peaks are low-correlation = likely
@@ -141,7 +141,7 @@ against the source. The **measurements stand; several interpretive claims do not
    "internal linkage says not charge" is retracted. Charge deprioritisation rests ONLY on the
    external prevalence-flat signal, which has low power on the z2-dominated data — absence of
    evidence, not a measured null.
-5. **Density proxy is endogenous (codex #9 / vibe #3).** Occupancy counts SpeXtract's own emitted
+5. **Density proxy is endogenous (codex #9 / vibe #3).** Occupancy counts SpeXtractor's own emitted
    hypotheses, a collider on abundance; fixing m/z removes little of it. Corrected: "no density
    penalty" → "no penalty visible in a proxy that cannot isolate one." Real MS1 feature density +
    within-feature matching is needed to make the causal claim.
@@ -172,7 +172,7 @@ Both reviewers made this a BLOCKER: 7.4% has no meaning without a reference extr
 spectrum-level ID rate on the same data. Measured on node-2 (node-1/06 in maintenance) by
 running the SAME `sage_deiso.json` on the reference implementation's dataset D mzML from `/ceph`:
 
-| | SpeXtract | the reference implementation |
+| | SpeXtractor | the reference implementation |
 |---|---|---|
 | emitted spectra | 1,528,147 | **700,434** |
 | identified spectra (peptide_q ≤ .01) | 113,495 | 26,986 |
@@ -201,7 +201,7 @@ this margin.
 
 ## What we actually lose: the coverage gap characterised (node-2, 2026-07-24)
 
-The clean comparison the project never had: the reference implementation and SpeXtract pseudo-spectra from the **same
+The clean comparison the project never had: the reference implementation and SpeXtractor pseudo-spectra from the **same
 dataset D acquisition**, searched with the **same `sage_deiso.json`** against the same FASTA. Extraction
 is the only variable — no second injection, no RT drift, no DDA-conditioning. `bench/coverage.py`.
 
@@ -398,7 +398,7 @@ Compounding methodological faults the reviewers caught, all valid:
   replicates (n=4); every swept arm is n=1.
 * **Wrong engine for the headline.** `docs/dataset D-BASELINE.md` already records the MSFragger gap as
   **−19.5%** (10,470 vs 13,014), not the −12% I quoted from Sage. Project policy says Sage flatters
-  SpeXtract; I published the flattered number.
+  SpeXtractor; I published the flattered number.
 * **`rp_max=1` re-tested a closed lever.** `dataset D-BASELINE.md` lists `competitive` and `rp_max` 2/4/8
   as already falsified. ~1.5 h spent re-deriving a known result.
 

@@ -161,8 +161,8 @@ PSMs by precursor coordinate ACROSS RT (charge + expmass 10 ppm + IM 0.01, singl
 **The multiple-testing-burden hypothesis is REFUTED.** Every arm's FDR CI sits at ~0.6-1.3%: collapse
 removes true AND entrapment PSMs PROPORTIONALLY, so the FDR does not improve -- peptides are simply
 lost. Emitting fewer spectra does NOT buy open-search sensitivity.
-**It is INTRINSIC, not a SpeXtract defect:** the reference implementation collapses the same way (-24% at top10, -54% at
-apex) and BOTH tools reduce to the SAME ~87k precursor features (spx 86,842 / dt 87,112) -- SpeXtract
+**It is INTRINSIC, not a SpeXtractor defect:** the reference implementation collapses the same way (-24% at top10, -54% at
+apex) and BOTH tools reduce to the SAME ~87k precursor features (spx 86,842 / dt 87,112) -- SpeXtractor
 just emits 1.33x more spectra per feature (6.43 vs 4.84). The across-cycle multiplicity is INDEPENDENT
 EVIDENCE (each cycle = a different noise realisation + co-isolation mixture, another shot at a different
 co-eluting peptide), not redundancy. Consistent with the long-standing "across-cycle spread 2.66 is
@@ -237,7 +237,7 @@ Unit = (peptide, delta-bin); classes scored separately: unmod (|d|<=8 mDa), near
 mass-error tail, NOT a mod), artifact (iso lattice +-k*1.00335, k=1..9), known (curated Unimod list),
 other (off-lattice, per-BIN FDR walks for top bins -- pooled class FDR let junk bins ride; the spx
 -485..-499 Da window-edge wall at ~36% raw entrap collapses to ~30-80 @1% under per-bin walks).
-| class @1% corrected FDR | SpeXtract | the reference implementation | ratio |
+| class @1% corrected FDR | SpeXtractor | the reference implementation | ratio |
 |---|---|---|---|
 | unmodified | 4,885 | 7,015 | 70% |
 | known-PTM (the raison-d'etre number) | 2,692 | 3,092 | **87%** |
@@ -286,7 +286,7 @@ bootstrap CIs, min-evidence rule (per-name @1% only when accepted e>=10), proven
 (1) 70.1% of spx nearzero peptides ARE dt's unmod peptides; (2) 89.4% same-scan concordance with our
 OWN closed search (same scan -> same peptide; 0.7% different -> chimeric explanation dead);
 (3) deltas 93.8% negative, median -16.2 mDa, slope -18.3 ppm vs calcmass (dt control ~symmetric).
-=> SpeXtract's reported precursor masses carry a SYSTEMATIC ~-18 ppm CALIBRATION BIAS introduced by
+=> SpeXtractor's reported precursor masses carry a SYSTEMATIC ~-18 ppm CALIBRATION BIAS introduced by
 our pipeline (same raw data as dt). Fixable (per-run linear recalibration of reported mono m/z);
 distinct from the old falsified "mass recalibration" lever (different target, corrupt metric).
 Scheduled as its own arm AFTER step 02 (both reviewers: do not confound the pre-registered arm).
@@ -298,12 +298,12 @@ sequence-level and is within 2% of 12,752 — unit mismatch closed, ratios now l
 **Step-01 bottom line:** the old "89% on open search" dissolves. At peptide level we are at ~parity
 on unmodified; known-PTM scale is comparable (ambiguity-limited both ways); BOTH tools' open-search
 delta dimension is dominated by non-PTM structure (lattice + integer-Da junk = 5-9x the legitimate
-classes) — a tool-CLASS finding worth publishing; and SpeXtract's one distinctive open-search defect
+classes) — a tool-CLASS finding worth publishing; and SpeXtractor's one distinctive open-search defect
 is the -18 ppm mass bias (fixable), vs the reference implementation's up-ladder envelope artifacts. Step 02 (emission
 arm) runs AS REGISTERED with a nearzero-stratified secondary readout, scored under this v3 metric.
 
 ## THE -8 ppm MASS BIAS: mechanism found + fixed (2026-09-01, follows the step-01 nearzero finding)
-**Every SpeXtract-reported m/z to date carries a systematic, m/z-dependent -5..-11 ppm error**
+**Every SpeXtractor-reported m/z to date carries a systematic, m/z-dependent -5..-11 ppm error**
 (median -8.3 ppm on identified precursors; dt control -1.1 ppm on the same raw data).
 **Mechanism (proven by direct comparison against Bruker's timsdata library via ctypes):** the loader
 (BrukerTimsFile -> opentims++) converts TOF->m/z with `OpenSourceTof2MzConverter (linear-in-sqrt)` --
@@ -361,7 +361,7 @@ step over-claimed in four ways, now corrected:
 2. **12,128 = provisional dataset D/vendor-SDK regression oracle, NOT a validated reference** until: cp0
    ablation (running), the IM-isolation arm, and dataset A/dataset B re-validation under vendor-cal.
 3. **"Leads the reference implementation" is not citable.** Maximum defensible wording (codex): "On dataset D, using Sage and
-   the vendor-SDK calibration configuration, SpeXtract yielded 5.3% more closed-search peptides; under
+   the vendor-SDK calibration configuration, SpeXtractor yielded 5.3% more closed-search peptides; under
    MSFragger it yielded 17.7% fewer." Per-1k-spectra efficiency: spx 13.2 vs dt 16.4 (dt +25%) -- the
    emission column stays in any public row. MSFragger flatness is UNINFORMATIVE (its default
    calibrate_mass auto-corrects input bias), not evidence against the fix.
@@ -405,12 +405,12 @@ head-to-head running to test whether part of it is instrument/per-file rather th
 
 ### FIRST 3-FILE HEAD-TO-HEAD vs the reference implementation (Sage closed, corrected calibration, 2026-09-01)
 the reference implementation had ONLY ever been measured on dataset D; dataset A/dataset B references created here under identical config.
-| file | SpeXtract (table model) | the reference implementation | ratio | our ppm | dt ppm |
+| file | SpeXtractor (table model) | the reference implementation | ratio | our ppm | dt ppm |
 |---|---|---|---|---|---|
 | dataset D | **11,976** | 11,517 | **104.0%** | +1.49 | -1.37 |
 | dataset A | **10,333** | 10,242 | **100.9%** | +3.19 | +0.27 |
 | dataset B | **9,891**  |  8,948 | **110.5%** | +2.29 | -0.60 |
-**SpeXtract reaches 100.9-110.5% of the reference implementation on closed Sage across the three files** -- no vendor
+**SpeXtractor reaches 100.9-110.5% of the reference implementation on closed Sage across the three files** -- no vendor
 library, open BSD path. STATISTICALLY (n=3 paired): mean 105.1%, 95% CI [93.0, 117.3] = consistent
 with PARITY, not an advantage; the earlier phrasing "matches or exceeds on ALL THREE files" was
 over-claiming on dataset A's +91. CORRECTION (review F4): the "ours 1.26% [1.00-1.51]" entrapment figure
@@ -463,7 +463,7 @@ basis) is cut -- its prerequisite ("apportion shows a signal") failed under the 
 apportion path ran the window loop at 6.1x (3,658 s) -- an hour-long run -- irrelevant now that it is dead.
 
 ### C2 estimator A/B (2026-09-02, 17:22): APEX m/z for traces is +2.6% peptides (same binary, env switch)
-`SPEXTRACT_MZ_ESTIMATOR` selects the reported m/z of every trace in `toTrace()`; default = OpenMS centroid
+`SPEXTRACTOR_MZ_ESTIMATOR` selects the reported m/z of every trace in `toTrace()`; default = OpenMS centroid
 (intensity-weighted mean over the trace's members).
 | estimator | spectra | Sage @1% | vs share-all default (12,217) | paired precursor ppm vs dt | paired fragment ppm vs dt |
 |---|---|---|---|---|---|
@@ -482,11 +482,11 @@ Default change is gated on the standing rule: **MSFragger on d7_apex before apex
 | **table model, APEX estimator** | **12,537 (+2.6%)** | **11,927 (+4.1%)** | **+0.78** |
 | the reference implementation | 11,517 | 13,932 | — |
 MSFragger ratio vs the reference implementation 82.3% -> 85.6%. Same binary (env switch), so the same-binary floor applies; both
-engines move the same way; ppm beside the count improved. Default changed in code (`SPEXTRACT_MZ_ESTIMATOR=mean`
+engines move the same way; ppm beside the count improved. Default changed in code (`SPEXTRACTOR_MZ_ESTIMATOR=mean`
 restores the OpenMS centroid). Owed next: dataset A/dataset B apex arms (Sage) and entrapment on the apex arm (queued).
 
 ### C9 FALSIFIED (2026-09-02, 19:05): dropping the precursor's M+1..M+3 from fragment lists LOSES peptides
-`SPEXTRACT_DROP_PREC_ISO=1` on the apex-default binary: isotope contamination of the emitted lists falls from
+`SPEXTRACTOR_DROP_PREC_ISO=1` on the apex-default binary: isotope contamination of the emitted lists falls from
 28.4% / 24.8% (M+1 / M+2 within 10 ppm) to 0.2% / 0.2%, and Sage drops **12,537 -> 12,249 (-2.3%**, only-apex
 1,061 / only-dropiso 773; same binary, env switch). The unfragmented precursor isotopes in a pseudo-MS/MS spectrum are
 useful to the engine (or their removal lets weaker peaks refill the 500-cap). Keep them; switch stays off.
@@ -530,7 +530,7 @@ FragPipe 24.0 headless, Basic-Search (MSFragger 25 ppm, our human_decoy FASTA) -
 (sequential, picked, 1% peptide), MSBooster OFF for both (it aborts on our pepXML, see above):
 | dataset D arm | peptides @1% | PSMs @1% | PSMs / peptide | ratio spx/dt |
 |---|---|---|---|---|
-| SpeXtract apex | 13,211 | 113,685 | 8.6 | — |
+| SpeXtractor apex | 13,211 | 113,685 | 8.6 | — |
 | the reference implementation | 15,947 | 31,700 | 2.0 | **82.8%** |
 | (raw-hyperscore walk, for reference) | 11,927 vs 13,932 | | | 85.6% |
 | (the reference implementation + MSBooster RT+spectra) | 18,670 | 37,086 | 2.0 | ours unavailable |
@@ -545,7 +545,7 @@ oracle-fragment arm. The learned charge/mono predictor stays conditional on (d).
 capped identically for both tools) is owed for the +17% predictions bring the reference implementation.
 
 ### STEP 02, sub-arm 1 -- PRE-REGISTERED (2026-09-02, 22:00): precursor-quality gate by isotope-envelope depth
-`SPEXTRACT_MIN_ISOTOPES=k` keeps precursors with >= k isotope peaks (k=2 is today's default via
+`SPEXTRACTOR_MIN_ISOTOPES=k` keeps precursors with >= k isotope peaks (k=2 is today's default via
 require_isotope_support; k=3 and k=4 are the arms). Emission falls with k; fragment sharing is untouched.
 Prediction if the MSFragger deficit is EMISSION COMPETITION: the spx/dt MSFragger ratio rises as emission falls
 toward the reference implementation's 700k (peptides@1% hold or rise while spectra drop). Prediction if it is FAINT-TAIL CONTENT: the
@@ -553,7 +553,7 @@ ratio is flat or falls (the gate removes exactly the faint precursors). Gates: S
 MSFragger raw walk vs msf_dt, emission count; both engines before any default change.
 
 ### STEP 02, sub-arm 2 -- PRE-REGISTERED (2026-09-02, 22:03): the reference implementation-precursor-MATCHED emission
-`SPEXTRACT_PRECURSOR_LIST=<rt_sec mz z>` keeps only our precursors that match a listed the reference implementation dataset D precursor
+`SPEXTRACTOR_PRECURSOR_LIST=<rt_sec mz z>` keeps only our precursors that match a listed the reference implementation dataset D precursor
 (|dRT| <= 10 s, |dm/z| <= 10 ppm, same charge). The list is the reference implementation's own 700,434 pseudo-spectra (extracted from
 its mzML; RT converted from minutes). This holds the PRECURSOR POPULATION fixed and varies only the spectra.
 Prediction if the MSFragger deficit is EMISSION COMPETITION: with the same precursor set the spx/dt MSFragger ratio
@@ -572,7 +572,7 @@ to 84.8%. It does not rise. So the extra spectra are not what costs us on MSFrag
 hypothesis is refuted for the second time, now with a precursor-quality gate rather than merging), and the gate removes
 real faint peptides on Sage (−6.4%). The deficit is per-precursor CONTENT of the faint tail, consistent with the
 rescoring A/B (ratio unchanged after Percolator) and H3 (identical scores on shared peptides). Sub-arm 2 (matched
-precursor population) is the direct test of that and is running. Side result: `SPEXTRACT_MIN_ISOTOPES=3` is a
+precursor population) is the direct test of that and is running. Side result: `SPEXTRACTOR_MIN_ISOTOPES=3` is a
 legitimate speed/emission knob (−39% spectra, −23% wall, −0.9% MSFragger, −6.4% Sage) -- not a default.
 
 ### STEP 02 sub-arm 2 RESULT (2026-09-02, 22:49): SAME PRECURSORS, SAME 85% -- the deficit is per-precursor content
@@ -633,7 +633,7 @@ pseudo-spectrum with the raw picked MS2 peaks of the precursor's apex frame insi
 present), the DIA-Umpire/the reference implementation-style "peak-level" spectrum, both engines; falsifier: dt-only deficit stays +2.
 
 ### CONTENT CANDIDATE 3 -- PRE-REGISTERED (2026-09-03, 03:35): raw apex-frame peak backfill
-`SPEXTRACT_BACKFILL_RAW=N` adds to each pseudo-spectrum the N most intense raw picked MS2 peaks of the frame nearest
+`SPEXTRACTOR_BACKFILL_RAW=N` adds to each pseudo-spectrum the N most intense raw picked MS2 peaks of the frame nearest
 the precursor's RT, inside its 1/K0 band (delta_im), not already present within 10 ppm -- untraced, single-frame
 content (the population the coverage arms showed we never trace). Arms: N=50, N=150. Predictions: if the faint tail's
 missing ions are these peaks, the dt-only matched-ion deficit (+2) shrinks and the MSFragger ratio rises (>= 90%);
@@ -668,7 +668,7 @@ IM band converts 1,151 the reference implementation-only peptides into shared on
 the first lever that moves it since the calibration fix. It costs Sage 2.6% (the added peaks are noise for the
 spectra that were already rich: Sage's scoring is hurt by them, MSFragger's top-150 cap is not); N=150 is too much
 for both. Not a default as measured -- the engines disagree. **Pre-registered next arm:** backfill only the faint
-tail: `SPEXTRACT_BACKFILL_RAW=50` + `SPEXTRACT_BACKFILL_MAXFRAGS=K` (apply only to spectra with <= K assembled
+tail: `SPEXTRACTOR_BACKFILL_RAW=50` + `SPEXTRACTOR_BACKFILL_MAXFRAGS=K` (apply only to spectra with <= K assembled
 fragments; K = 50 and 150 -- the first launch of this arm collided with a second chain on the same output paths at
 06:18 and was stopped and relaunched cleanly at 06:19). Prediction: MSFragger keeps most of +5% while Sage returns to ~12,500; falsifier: Sage still
 drops -> the noise cost is in the faint spectra themselves, and the selection must be per-peak (IM/RT co-elution of the
@@ -677,14 +677,14 @@ raw peak, i.e. MS2 aggregation across neighbouring frames, C6).
 ### ASSEMBLY-LOSS ARM FALSIFIED (2026-09-03, 06:16): `min_fragments 2` changes nothing
 928,378 spectra (+565), Sage and MSFragger identical to apex, dt-only PSM coverage unchanged (64%). The hypothesised-
 but-not-emitted precursors (17% of the reference implementation-only) have NO correlated fragment trace at all, not too few -- the same
-untraced-content problem as the searched tail. **Pre-registered follow-up:** `SPEXTRACT_BACKFILL_EMPTY=1` with
-`SPEXTRACT_BACKFILL_RAW=50`: a hypothesised precursor with no correlated trace still gets a spectrum made of its apex
+untraced-content problem as the searched tail. **Pre-registered follow-up:** `SPEXTRACTOR_BACKFILL_EMPTY=1` with
+`SPEXTRACTOR_BACKFILL_RAW=50`: a hypothesised precursor with no correlated trace still gets a spectrum made of its apex
 frame's IM-band peaks (min_fragments honoured). Prediction: the dt-only "no PSM at all" count (1,436) falls and
 MSFragger rises further; falsifier: those spectra are unidentifiable (counts flat, emission up). Runs after the
 faint-tail-only backfill arm.
 
 ### FAINT-TAIL-ONLY BACKFILL (2026-09-03, 07:11): removes the Sage cost, but also most of the MSFragger gain
-`SPEXTRACT_BACKFILL_RAW=50` applied only to spectra with <= K assembled fragments:
+`SPEXTRACTOR_BACKFILL_RAW=50` applied only to spectra with <= K assembled fragments:
 | dataset D arm | Sage @1% (vs apex 12,537) | MSFragger @1% (vs 11,927) | dt-only deficit |
 |---|---|---|---|
 | unconditional N=50 (05:39) | 12,208 (−2.6%) | **12,539 (+5.1%)** | +3 on the remaining set |
@@ -694,15 +694,15 @@ Reading: the MSFragger gain of the unconditional arm comes from backfilling the 
 the 500-cap; share-all gives even faint precursors hundreds of fragments), which is exactly where Sage pays. Gating by
 fragment count therefore does not reach the the reference implementation-only spectra (deficit still +2). K=150 is a clean small win on
 both engines (+1.5% / +0.6%, superset-like) -- a candidate default pending dataset A/dataset B + entrapment, not a mechanism.
-**Pre-registered next arm:** gate the backfill by PRECURSOR intensity instead (`SPEXTRACT_BACKFILL_MAXQ=q`: only
+**Pre-registered next arm:** gate the backfill by PRECURSOR intensity instead (`SPEXTRACTOR_BACKFILL_MAXQ=q`: only
 precursors below the window's q-quantile of MS1 intensity), N=50, q = 0.5 and 0.25. Prediction: MSFragger keeps most
 of +5% (the faint precursors are the dt-only ones) while Sage stays >= 12,500; falsifier: the gain tracks the rich
 spectra regardless of precursor intensity (then MSFragger simply likes more peaks, and the two engines want
 different spectra -- a per-engine output option, not a default).
 
 ### BACKFILL-EMPTY FALSIFIED (2026-09-03, 08:35): 53,410 extra spectra buy nothing on either engine
-`SPEXTRACT_BACKFILL_EMPTY=1` (a hypothesised precursor with no correlated fragment trace still gets a spectrum built
-from its apex frame's IM-band peaks) + `SPEXTRACT_BACKFILL_RAW=50`. Emission rises 927,813 -> **981,223 (+5.8%)**, so
+`SPEXTRACTOR_BACKFILL_EMPTY=1` (a hypothesised precursor with no correlated fragment trace still gets a spectrum built
+from its apex frame's IM-band peaks) + `SPEXTRACTOR_BACKFILL_RAW=50`. Emission rises 927,813 -> **981,223 (+5.8%)**, so
 the feature does what it says; the identifications do not follow.
 | dataset D arm | spectra | Sage @1% (apex 12,537) | MSFragger @1% (apex 11,927; dt 13,932) | dt-only |
 |---|---|---|---|---|
@@ -713,12 +713,12 @@ the feature does what it says; the identifications do not follow.
 Reading: at equal backfill setting the empty arm reproduces the no-empty arm to within replicate noise on both engines
 (12,600 vs 12,539 MSFragger; −2.5% vs −2.6% Sage), and the K-gated empty arm is *worse* than K=150 alone (12,593 vs
 12,724 Sage). The 53k trace-free precursors are not identifiable: the pre-registered falsifier ("counts flat, emission
-up") is met exactly. **Verdict: `SPEXTRACT_BACKFILL_EMPTY` stays off and is not a default candidate.** It also
+up") is met exactly. **Verdict: `SPEXTRACTOR_BACKFILL_EMPTY` stays off and is not a default candidate.** It also
 confirms the assembly-loss finding from the other side -- the the reference implementation-only precursors we never emit are not lost to
 a fragment-count threshold, they have no correlated MS2 signal for us to find at all.
 
 ### PRECURSOR-INTENSITY-GATED BACKFILL (2026-09-03, 09:05): prediction held; q=0.5 is the best point on the frontier
-`SPEXTRACT_BACKFILL_RAW=50` applied only to precursors below the window's q-quantile of MS1 intensity. Emission is
+`SPEXTRACTOR_BACKFILL_RAW=50` applied only to precursors below the window's q-quantile of MS1 intensity. Emission is
 unchanged (927,813 spectra in every arm), so this is purely a content lever.
 | dataset D arm | Sage @1% (apex 12,537) | MSFragger @1% (apex 11,927; dt 13,932) | dt-only | shared w/ dt |
 |---|---|---|---|---|
@@ -821,7 +821,7 @@ entrapment inside the charge-gate arm's interval, and dataset A replication of t
 ### WINDOW-LOOP PERFORMANCE, ROUND 2 (2026-09-04) -- three output-neutral changes, THREE files
 
 Measured old-vs-new with both arms on the SAME host, three files concurrently on three machines,
-all running one binary from the shared ceph install (`/path/to/shared/spextract`) so the
+all running one binary from the shared ceph install (`/path/to/shared/spextractor`) so the
 arms cannot differ by build. **Every arm is digest-identical to its base**, which is the gate:
 these changes are output-neutral by construction, so peptides are identical by definition and no
 search was run.
@@ -942,7 +942,7 @@ behaviour that on x86 rejects every fragment where the old test passed all of th
 
 ## v0.3.0 FINAL BENCHMARK — six datasets, shipped defaults (2026-09-04)
 
-Every dataset in the cohort, run with `spextract -in <file>.d -out pseudo.mzML -threads 100` and
+Every dataset in the cohort, run with `spextractor -in <file>.d -out pseudo.mzML -threads 100` and
 **nothing else**. If a figure below needed a flag, the defaults would be wrong; that is now a test.
 Three nodes in parallel, both engines, `spx:detector=integer` and
 `spx:require_isotope_support=1` recorded in every output.

@@ -33,7 +33,7 @@ constant factors.
 | Q1 | **Fix the zero-padded Pearson variance** — compute over the union support, not G≈1300 implicit zeros | a documented-wrong statistic shipping as default; miscalibrated exactly on the sparse faint tail where the gap lives; upstream of the gate, rank key, and IM weight | +1–4% both engines (targeted) | 1 day | Low–med (retune min_correlation). CAVEAT: logoverlap [a different zero-pad fix] already fell −9%; test carefully |
 | Q2 | **Correlation-power intensity weight** `inten *= c^k` (within-spectrum, share-all preserved) | engine-agnostic generalization of the IM weight (which was Sage-specific) → targets MSFragger's 79% | +2–5% MSFragger | 2 days | Med (kill if Sage regresses) |
 | Q3 | **Native pre-centroiding aggregation** (running) → then decide 2D detector | the reference implementation's actual upstream signal enhancement; MS2-aggregation arm most likely to help MSFragger | 0–8% MSFragger | running / multi-week | the running test IS the experiment |
-| Q4 | **Open-search correctness as a release gate** — charge abstention, monoisotope offset, mass-window; only `spx_guessed` is stamped though `open_search_safe` promises isotope-offset metadata | wrong charge/mono → lost IDs or false delta-mass structure; existential for SpeXtract's actual use | little closed gain, big open-search validity | 3–5 days | Low algo risk |
+| Q4 | **Open-search correctness as a release gate** — charge abstention, monoisotope offset, mass-window; only `spx_guessed` is stamped though `open_search_safe` promises isotope-offset metadata | wrong charge/mono → lost IDs or false delta-mass structure; existential for SpeXtractor's actual use | little closed gain, big open-search validity | 3–5 days | Low algo risk |
 | Q5 | export extraction evidence (IM residual, XIC corr, isotope quality) as a rescoring sidecar (MSBooster/Percolator) | bare engines discard the multidimensional evidence a 1D pseudo-spectrum drops | +3–8% workflow | 1–2 weeks | Med |
 
 Honest ceiling without the reference implementation's upstream detector: ~90% Sage (near it), MSFragger ~79% with maybe
@@ -47,11 +47,11 @@ Honest ceiling without the reference implementation's upstream detector: ~90% Sa
 peptide count structurally rewards over-emission (our worst failure; 73.5% of spectra pinned at the
 500-peak cap IS over-emission), and some of the seven "falsified" fragment levers may have been
 falsified on a metric that rewards the behaviour they were fixing. The binding metrics are:
-(a) **entrapment-controlled open/blind PTM-site discovery rate** (SpeXtract's reason to exist),
+(a) **entrapment-controlled open/blind PTM-site discovery rate** (SpeXtractor's reason to exist),
 (b) **total pipeline time = extract + search** (924k fat spectra cost the search engine dearly),
 (c) **quantification accuracy / FDR calibration**.
 And the real differentiator is NOT open-search capability (the reference implementation does unrestricted/PTM/HLA too) —
-it is that SpeXtract is an **open, auditable BSD-3 implementation** independent of a closed JAR. The
+it is that SpeXtractor is an **open, auditable BSD-3 implementation** independent of a closed JAR. The
 product claim should be *"an auditable open diaPASEF extractor whose open-search FDR, charge/mono
 correctness, PTM localization and quant are demonstrably trustworthy."* **Build the entrapment-
 controlled open-search benchmark and re-baseline; until it exists, both 7:47 and 11,517 are the wrong

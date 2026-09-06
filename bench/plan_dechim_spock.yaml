@@ -7,7 +7,7 @@ title: "#1 corrected (node-2 re-run): de-chimerize the top-150, both arms one bi
 # This build predates the trace_bands=12 default (it ships 0), so both arms pass it EXPLICITLY —
 # identical across the pair, and matching shipped behaviour rather than this build's stale default.
 samples: [dataset D]
-binary: /path/to/scratch/rv/opt/bin/spextract
+binary: /path/to/scratch/rv/opt/bin/spextractor
 threads: 128
 arms:
   - name: base

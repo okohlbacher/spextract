@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace spextract
+namespace spextractor
 {
 // ---------------------------------------------------------------------------------------------
 // Read the calibration a .d actually uses, straight from analysis.tdf with the sqlite3 C API.
@@ -79,4 +79,4 @@ inline bool loadTdfCalibration(const std::string& tdf, TdfMzCalibration& cal,
   if (t1_by_frame.size() < 2) { why = "no Frames rows"; return false; }
   return true;
 }
-} // namespace spextract
+} // namespace spextractor

@@ -1,4 +1,4 @@
-# Why SpeXtract emits 1.53M spectra vs the reference implementation's 700k — adversarial review (codex + vibe + kimi)
+# Why SpeXtractor emits 1.53M spectra vs the reference implementation's 700k — adversarial review (codex + vibe + kimi)
 
 Deep review reassessing WHEN/WHY emission ballooned to 2.2× the reference implementation and whether the merge
 strategies can bring it back to ~700k **at neutral peptides** (a runtime win, not a peptide win).
@@ -79,7 +79,7 @@ levers remain, both **unproven** and pointing upstream (prevent, don't combine):
   artifact, not verified identical features (codex #13) — must validate on raw apex/XIC/IM.
 - **Isotope-support quality gate on singletons** — biggest cut (~784k spectra if guessed emit at the
   same rate) but **highest risk of silently losing the low-abundance / unexpected-mod / nonspecific
-  open-search species that are SpeXtract's entire reason to exist** (codex (b), kimi's open-search
+  open-search species that are SpeXtractor's entire reason to exist** (codex (b), kimi's open-search
   caveat). A blanket "require ≥1 partner" is the single change most likely to lose the peptides that
   justify the tool.
 
@@ -106,7 +106,7 @@ separately for modified / low-intensity / high-charge / guessed-only, on **both*
   collapse (one joint XIC from coordinate-equivalent hypotheses), *not* the existing keep-one-seed
   dedup. But run the oracle + current-dedup A/B first — there is presently **no evidence** any
   existing knob reaches 700k.
-- **(b) Most likely to silently lose the peptides that justify SpeXtract:** a blanket "require ≥1
+- **(b) Most likely to silently lose the peptides that justify SpeXtractor:** a blanket "require ≥1
   isotope partner" gate.
 - Do **not** merge everything, do **not** confuse `default_charge=0` with filtering, do **not** force
   700k as a target in itself. First label the guessed population, measure guessed-only peptides, and

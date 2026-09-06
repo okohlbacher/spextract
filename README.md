@@ -1,22 +1,22 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="SpeXtract" width="132">
+  <img src="assets/logo.svg" alt="SpeXtractor" width="132">
 </p>
 
-<h1 align="center">SpeXtract</h1>
+<h1 align="center">SpeXtractor</h1>
 
 <p align="center">
   <em>Pseudo-DDA spectra from Bruker timsTOF diaPASEF data, for open and blind searching.</em>
 </p>
 
 <p align="center">
-  <a href="https://github.com/okohlbacher/spextract/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/okohlbacher/spextract/actions/workflows/tests.yml/badge.svg"></a>
+  <a href="https://github.com/okohlbacher/spextractor/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/okohlbacher/spextractor/actions/workflows/tests.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-BSD--3--Clause-blue.svg"></a>
-  <a href="https://github.com/okohlbacher/spextract/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/okohlbacher/spextract"></a>
+  <a href="https://github.com/okohlbacher/spextractor/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/okohlbacher/spextractor"></a>
 </p>
 
 Extract pseudo-DDA ("pseudo-MS/MS") spectra from Bruker timsTOF **diaPASEF** data.
 
-SpeXtract turns a data-independent acquisition into a set of pseudo-tandem spectra that any
+SpeXtractor turns a data-independent acquisition into a set of pseudo-tandem spectra that any
 ordinary DDA search engine can read. Each emitted spectrum pairs one precursor hypothesis with the
 fragment traces that co-elute with it in both retention time and ion mobility. The output is plain
 mzML, so it feeds Sage, MSFragger, Comet or anything else that reads mzML — no library, no
@@ -26,7 +26,7 @@ That last point is the reason the tool exists: because the search space is not e
 the search runs, an **open or blind search** over the output can report variants and unexpected
 modifications that a library-based DIA workflow cannot represent.
 
-SpeXtract is BSD-3-Clause and is a standalone application. **OpenMS is a prerequisite, not a
+SpeXtractor is BSD-3-Clause and is a standalone application. **OpenMS is a prerequisite, not a
 host** — the tool links against an OpenMS installation but lives outside the OpenMS source tree.
 
 ## Requirements
@@ -45,8 +45,8 @@ size a node from your own data rather than from a number quoted here.
 ## Install
 
 ```bash
-git clone https://github.com/okohlbacher/spextract.git
-cd spextract
+git clone https://github.com/okohlbacher/spextractor.git
+cd spextractor
 scripts/apply_openms_patches.sh /path/to/OpenMS    # see "OpenMS patches" below
 cmake -B build -DOpenMS_DIR=/path/to/OpenMS/build
 cmake --build build -j
@@ -61,7 +61,7 @@ git clone https://github.com/OpenMS/OpenMS.git
 git -C OpenMS checkout $(sed -n 's/^OPENMS_BASE=//p' patches/openms.lock)
 ```
 
-The binary is `build/spextract`. `cmake --install build` puts it in `bin/`.
+The binary is `build/spextractor`. `cmake --install build` puts it in `bin/`.
 
 ### OpenMS patches
 
@@ -75,7 +75,7 @@ two patches. **Both matter, and the build will not tell you if they are missing:
   (`tdf_table_modeltype1` | `bruker_sdk` | `legacy_chord_APPROXIMATE`). An unsupported calibration
   table **fails closed** rather than silently producing biased masses.
 - **Lock-free elution-peak detection.** OpenMS guards a shared vector with a program-global critical
-  section. Called from inside SpeXtract's parallel window loop, that one lock serialises the tool.
+  section. Called from inside SpeXtractor's parallel window loop, that one lock serialises the tool.
 
 Optionally, `OPENMS_BRUKER_SDK_PATH=/path/to/libtimsdata.so` uses Bruker's own library for the
 conversion instead. It is an independent cross-check, not a requirement, and is not redistributed.
@@ -89,7 +89,7 @@ primary input and is faster.
 ## Run
 
 ```bash
-spextract -in sample.d -out pseudo.mzML
+spextractor -in sample.d -out pseudo.mzML
 ```
 
 That is the complete command. Threads default to every core on the machine, and every other default
@@ -124,7 +124,7 @@ when that format is mzPeak.
 | `-trace:max_span_sec` | 120 | trim a mass trace to this many seconds around its apex |
 | `-out_type` | from extension | force `mzpeak` or `mzML` instead of taking it from the `-out` name |
 
-`spextract --help` lists every option with the measurement behind each default.
+`spextractor --help` lists every option with the measurement behind each default.
 
 ### Reading the output
 
@@ -171,7 +171,7 @@ by raw counts. The two statements are about different things and both have been 
 ## Tests
 
 ```bash
-python3 test/test_spextract.py build/spextract
+python3 test/test_spextractor.py build/spextractor
 ```
 
 Twelve end-to-end checks against a synthetic acquisition: isotope ownership, the charge floor,

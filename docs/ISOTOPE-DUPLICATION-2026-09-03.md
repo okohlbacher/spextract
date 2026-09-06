@@ -87,7 +87,7 @@ wrong-mono rate and with `findPartner` matching m/z, RT and IM but never intensi
 
 ## 4. Mechanism: a consumed peak is invisible, so the leftover seeds its own precursor
 
-`findPartner` skips any peak already marked `used[]` (src/spextract.cpp:1129). When an earlier
+`findPartner` skips any peak already marked `used[]` (src/spextractor.cpp:1129). When an earlier
 seed consumes a run, a remaining peak one step up can no longer walk left to it, finds nothing, and
 becomes its own monoisotope. The signature is visible in the emitted metadata: heavy members carry
 systematically FEWER isotope partners than their light partners (`spx_n_isotopes` mean 3.53 vs 4.59;
@@ -112,7 +112,7 @@ the better-fitting member), not suppression.
 
 ## 6. Implemented: collapse the precursors before extraction
 
-`SPEXTRACT_ISO_COLLAPSE=intense|light|heavy|niso` (with `SPEXTRACT_ISO_COLLAPSE_K`, default 3) runs
+`SPEXTRACTOR_ISO_COLLAPSE=intense|light|heavy|niso` (with `SPEXTRACTOR_ISO_COLLAPSE_K`, default 3) runs
 after the isotope-support gate and before the window loop, so the duplicate hypotheses never reach
 extraction and their extraction cost is saved as well.
 
@@ -227,7 +227,7 @@ lands at 656,254 spectra, below the reference implementation's 700,434 -- agains
 the best collapse setting. Five times the efficiency, and one line of code instead of a graph
 algorithm.
 
-`SPEXTRACT_MIN_CHARGE=z` implemented. **Pre-registered arm (running):** z>=2, z>=2 with the k=1
+`SPEXTRACTOR_MIN_CHARGE=z` implemented. **Pre-registered arm (running):** z>=2, z>=2 with the k=1
 collapse, and z>=3, on dataset D with both engines and entrapment. Prediction: z>=2 loses under 2% of Sage
 peptides, and may GAIN, since removing 29% of never-identified spectra also removes their share of
 the multiple-testing burden. Falsifier: peptides fall more than the 1.73% the offline join predicts,

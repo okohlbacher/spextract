@@ -7,7 +7,7 @@ Security tab, rather than opening a public issue.
 
 ## Scope
 
-SpeXtract is a batch command-line tool. It reads instrument data and writes mzML; it opens no
+SpeXtractor is a batch command-line tool. It reads instrument data and writes mzML; it opens no
 sockets, runs no server, and requires no credentials. The realistic security surface is therefore
 **untrusted input files**: a malformed or hostile Bruker `.d`, `.mzML` or `.mzpeak` reaching the
 parser. Reports of crashes, out-of-bounds reads or unbounded allocation triggered by an input file
@@ -18,5 +18,5 @@ route it upstream.
 
 ## Data handling
 
-SpeXtract reads local files and writes local files. It does not phone home, collect telemetry, or
+SpeXtractor reads local files and writes local files. It does not phone home, collect telemetry, or
 transmit anything. If you find otherwise, that is a security bug — report it.

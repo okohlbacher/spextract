@@ -24,6 +24,6 @@ bench/semantic_digest.py before.mzML after.mzML
 
 ## Checks
 
-- [ ] `python3 test/test_spextract.py <binary>` passes
+- [ ] `python3 test/test_spextractor.py <binary>` passes
 - [ ] A run with only `-in`, `-out` and `-threads` still reproduces the benchmarked configuration
 - [ ] No acquisition or specimen identifiers added to tracked files

@@ -1,8 +1,8 @@
-The plan below is written against the **current** file (`<repo>/src/spextract.cpp`, 3853 lines), not against the file the eight analyses read. That distinction is load-bearing and is the first thing in the document.
+The plan below is written against the **current** file (`<repo>/src/spextractor.cpp`, 3853 lines), not against the file the eight analyses read. That distinction is load-bearing and is the first thing in the document.
 
 ---
 
-# SpeXtract integer detector: memory and lifetime plan
+# SpeXtractor integer detector: memory and lifetime plan
 
 **Reading note that changes everything below.** The eight analyses and both skeptic passes were run against the pre-redesign file (3754 lines). Since then four commits landed — `1ed875b` (design), `a3ce034` (revision 2), `3a1d91e` (implementation), `3bdcb60` (comment) — all *after* `9adcfcf`, the commit that produced the measured ledger. **The 68.6 GB / 105 GB ledger of record does not describe the code in the tree**, and no benchmark has been run since the redesign. Two of the eight dimensions are now about structures that no longer exist:
 
@@ -67,7 +67,7 @@ Anchor for every row: the slab line is the only internally consistent one in the
 | **`frame_of`** (:850) | 4 B/peak — **4.8 GB nominal** | delete; frame comes from the loop variable at every hot site, one `upper_bound`−1 over `frame_off` per *seed* | **1.6–4.8 GB.** Skeptics split: 4.8 GB is the nominal ceiling; 1.6 GB is the floor if only windows actually inside :3263-3292 count. Take the ledger delta after the guard is re-scoped. | none by construction (four value-identical substitutions) | low |
 | **`member`** (:851) | 1 B/peak — **1.2 GB nominal** | delete; recompute `(double)sl.inten[k] > noise` at :928 (pass `noise` in) | **0.4–1.2 GB**, same scope disagreement | none by construction — but line 869 must keep **both** conjuncts (`> noise && > min_apex`); `ms2_chrom_peak_snr` may be < 1 | low |
 | **`order`** (:853) | 4 B/seed, capacity ∈ {P/4, P/2, P} | count seeds, reserve exactly | **0 – 2.4 GB**, expected ~1.2 GB. Entirely contingent on the unmeasured seed fraction *m*. | none by construction | low, but **measure `m` first** |
-| **slab** (:750-760) | 10 B/peak — **12.0 GB** | drop sub-noise peaks in `toSlab`; carry raw `tof` min/max and an F-sized raw occupancy count on `PeakSlab` | **(1−m) × (12.0 + frame_of + member)**. At m = 0.6 → ~7 GB; at m = 0.9 → ~1.8 GB. | claimed none-by-construction, but **only if** band edges come from the RAW tof range (:3260-3261 → :3277-3278) and `SPEXTRACT_INT_EMPTY_RAW` (:971) reads a stored raw count. Get either wrong and every band's seed partition moves silently. | **medium** |
+| **slab** (:750-760) | 10 B/peak — **12.0 GB** | drop sub-noise peaks in `toSlab`; carry raw `tof` min/max and an F-sized raw occupancy count on `PeakSlab` | **(1−m) × (12.0 + frame_of + member)**. At m = 0.6 → ~7 GB; at m = 0.9 → ~1.8 GB. | claimed none-by-construction, but **only if** band edges come from the RAW tof range (:3260-3261 → :3277-3278) and `SPEXTRACTOR_INT_EMPTY_RAW` (:971) reads a stored raw count. Get either wrong and every band's seed partition moves silently. | **medium** |
 
 **Not worth its complexity:** band-scoped `visited` (per-band-per-frame offset tables, ~20 lines, needs a reach histogram to pick the margin) buys 0.55 GB *on top of* the bitset's 4.29 GB. A shared-across-bands `visited` buys 0.56 GB and changes output (a peak claimed by a neighbouring band mid-flight becomes `++d.missed` at :985, which can terminate or invalidate a trace). Both are refused on ratio, not on correctness.
 
@@ -175,7 +175,7 @@ Ordered by (measured or well-bounded saving) ÷ (risk × code added). **B** = ou
 
 | # | change | GB saved | runtime | output | experiment |
 |---|---|---|---|---|---|
-| 0 | **Verify the landed trace redesign** (no code) | re-takes the ledger | — | **B** | dataset A, HEAD vs `4bd81c2`, `SPEXTRACT_DET=1` + `SPEXTRACT_MEM_LEDGER=1`. Falsifier: any per-window digest differs, **or** `traces` does not fall 35.6 → < 12 GB. |
+| 0 | **Verify the landed trace redesign** (no code) | re-takes the ledger | — | **B** | dataset A, HEAD vs `4bd81c2`, `SPEXTRACTOR_DET=1` + `SPEXTRACTOR_MEM_LEDGER=1`. Falsifier: any per-window digest differs, **or** `traces` does not fall 35.6 → < 12 GB. |
 | 1 | **Free slab + prep before `splitIntegerTraces`** — move :3300-3303 above :3296; scope `tprep`+`g_prep` to a block ending :3292 | ceiling 22.8; realistic **3–8** (× fraction of windows in EPD at the peak) | neutral / mildly positive (gate reads real free RAM) | **B** — `splitIntegerTraces` cannot name either object | ledger delta on `MEM_SLAB` / `MEM_PREP` + process peak RSS. Falsifier: RSS and the simultaneous-peak line both unmoved ⇒ no window is ever in EPD while another peaks. |
 | 2 | **`visited` → bitset** (:894, 4 lines) | **4.29** (both skeptics exact) | neutral | **B** | same run as #1 (different ledger line). Falsifier: any digest difference = indexing bug. |
 | 3 | **Ledger fix** (~10 lines) | 0 | neutral | **B** | prerequisite for every byte claim below — see §7 E1. |
@@ -198,7 +198,7 @@ Nothing in this table requires the both-engines rule as written. **That is the p
 Runs are dataset A unless stated. Builds that share a run are ones whose effects land on **different ledger lines**, so the ledger attributes them even though process RSS does not.
 
 **E0 — the baseline nobody has (isolated, must be first).**
-Two runs of the *unmodified* HEAD plus one of `4bd81c2`, with `SPEXTRACT_DET=1` and `SPEXTRACT_MEM_LEDGER=1`. The two HEAD runs establish whether the per-window `[det]` digest is reproducible at fixed threads — the project record says the tool is **not** digest-reproducible end-to-end (~1e-4 factor; the standing gate is peptide-set overlap), and the `[det]` line is emitted upstream of that. If it is stable, digests gate everything below; if not, every **B** item falls back to peptide sets and the plan gets three times more expensive. Attach the §5 thread-state sampler; it is free.
+Two runs of the *unmodified* HEAD plus one of `4bd81c2`, with `SPEXTRACTOR_DET=1` and `SPEXTRACTOR_MEM_LEDGER=1`. The two HEAD runs establish whether the per-window `[det]` digest is reproducible at fixed threads — the project record says the tool is **not** digest-reproducible end-to-end (~1e-4 factor; the standing gate is peptide-set overlap), and the `[det]` line is emitted upstream of that. If it is stable, digests gate everything below; if not, every **B** item falls back to peptide sets and the plan gets three times more expensive. Attach the §5 thread-state sampler; it is free.
 *Falsifier:* any window digest differs between HEAD and `4bd81c2` ⇒ the redesign changed output and must be fixed before anything else. Or `traces` does not fall below 12 GB ⇒ the redesign's own arithmetic is wrong.
 
 **E1 — instrument + two lifetime/representation fixes + one counter (one build, one run).**

@@ -33,7 +33,7 @@ markers. Fixed (epoch anchored at main_).
 | # | measure | expected | byte-identical? | status |
 |---|---|---|---|---|
 | 1 | **Parallel batched pick+compact in our consumer** (64-frame batches, ordered append) | load 1,046 -> 637 s; total 33:05 -> **25:28 (-23%)** | intensities differ at 1e-5..1e-4 rel. (chaotic amplification of last-ulp), m/z identical, **Sage 12,200 = identical peptide count**; self-determinism run pending | **DONE, measured** |
-| 2 | **Decode-once, frame-major, parallel decode in the loader** (per-thread ZSTD_DCtx; batch via SPEXTRACT_LOAD_BATCH) | removes the 2x re-decode AND parallelises the remaining ~637 s serial path; predicted load -> **~50-100 s** | expected identical to #1's output (per-window frame order preserved) | **built; sweep 64/256/1024 running** |
+| 2 | **Decode-once, frame-major, parallel decode in the loader** (per-thread ZSTD_DCtx; batch via SPEXTRACTOR_LOAD_BATCH) | removes the 2x re-decode AND parallelises the remaining ~637 s serial path; predicted load -> **~50-100 s** | expected identical to #1's output (per-window frame order preserved) | **built; sweep 64/256/1024 running** |
 | 3 | Cull traces with < min_correlation_points support before EPD/grid (codex #2; "R2") | 8-18% wall, 15-35 GB RSS | yes | next |
 | 4 | Link tcmalloc/jemalloc in CMake (kimi: July LD_PRELOAD A/B measured -18.4% RSS, -10.7% wall); free A/B `MALLOC_ARENA_MAX=4` first | -20..-60 GB RSS | yes | queued (needs quiet node) |
 | 5 | Band construction: two lower_bounds instead of O(bands x peaks) scan ("R3") | 3-8% wall | yes | next |
@@ -75,11 +75,11 @@ Sweep is gated to start only after the concurrent MSFragger run has exited (it w
   8 chunks = 8 workers; the "parallel" pick ran 8-way, so 1046 -> 637 s is the 8-way number, not the
   100-way one (implied serial pick ~467 s, residual ~58 s). The loader's `(dynamic, 4)` over 256
   frames capped the decoder at 64 workers (16 at batch 64). Both are now chunk 1, pick batch 256
-  (`SPEXTRACT_PICK_BATCH`), and the running sweep will build this binary first.
+  (`SPEXTRACTOR_PICK_BATCH`), and the running sweep will build this binary first.
 - **Exceptions in both OMP regions** (codex #11) would have aborted the process; both loops now
   capture and rethrow serially like the full-load path.
 - **Vendor-SDK converter thread-safety is unvouched** (codex #9, kimi): the loader runs serially
-  when the SDK converter is active unless `SPEXTRACT_SDK_PARALLEL` is set. The TDF-table converter
+  when the SDK converter is active unless `SPEXTRACTOR_SDK_PARALLEL` is set. The TDF-table converter
   is read-only after construction. Cluster runs use the table (provenance `tdf_table_modeltype1`).
 - **Sweep timing gated** on the concurrent MSFragger job exiting (it was not).
 
@@ -92,7 +92,7 @@ serial-pick dataset D run (`final_t100`, 12,200) and the batched-pick run (12,20
 (`tbl_s30`, 11,976) differs from it by 2,730 peptides (20% of the union) -- the cross-config chaos is
 a 20% membership churn at a 2% count level, so count equality alone is indeed a weak test and set
 equality is a strong one. The 1e-5..1e-4 intensity differences are tens-to-hundreds of float ULPs
-(codex #2), cause not yet shown; `SPEXTRACT_PICK_SERIAL=1` on the new build is the direct A/B.
+(codex #2), cause not yet shown; `SPEXTRACTOR_PICK_SERIAL=1` on the new build is the direct A/B.
 
 **Pre-registered load predictions for the sweep:** kimi 15-30 s (fully parallel, 35-70% efficiency);
 codex 105 / 75 / 70 s for batch 64 / 256 / 1024 -- with the OLD chunking; with chunk 1 codex's
@@ -124,7 +124,7 @@ index) -- it is a per-precursor quantity moving by 1e-4 and propagating into eve
 so it is quality-neutral, but the README's fixed-thread reproducibility claim is false as stated and the
 serial-pick v0.2.0 streaming binary was never self-tested. Running now (`bench_det2.sh`): S1/S2 (serial
 pick) and P1/P2 (parallel pick) on the fixed build -- if S1==S2 the batched pick is the entry point; if
-S1!=S2 it is downstream. Chained (`bench_det3.sh`): `SPEXTRACT_DET=1` logs an order-insensitive digest of
+S1!=S2 it is downstream. Chained (`bench_det3.sh`): `SPEXTRACTOR_DET=1` logs an order-insensitive digest of
 MS1 traces, precursors, and each window's fragment traces, so two runs pinpoint the first stage that differs.
 
 **The 48 s "discrepancy" (both reviewers):** per-phase tables of the three runs resolve it as run-to-run
@@ -174,7 +174,7 @@ Remaining sweep: batch 64, batch 1024, MALLOC_ARENA_MAX=4.
 - Reader: OpenMS' in-tree `MzPeakFile` (2,571 lines, direct Arrow) has no ims-compact/tof or
   per-peak-IM support and returned 0 spectra on these files; the mzPeak C++ library fork
   (okohlbacher/mzpeak-openms trunk 139cc64, 2026-09-01; 164 ahead of / 1 behind OpenMS/mzpeak)
-  reads ims-compact, per-peak IM and per-window mobility bands. SpeXtract now carries
+  reads ims-compact, per-peak IM and per-window mobility bands. SpeXtractor now carries
   `src/MzPeakStreamLoad.h`: a streaming .mzpeak loader on that library with the same (MS1 first,
   then per-(frame, window)) hand-off contract as the .d loader; build-optional via `-DMZPEAK_ROOT`.
   Cluster build: library against contrib Arrow 23 (pin relaxed from >=24), Boost 1.89 from the
@@ -220,7 +220,7 @@ the consumer's parallel flush (buffer MS1 like MS2, keep frame order). Expected 
   model; converter-recalibrated 1/K0 vs our rational TIMS calibration): 50/50 stage digests differ,
   +0.3% spectra. Sage accepted-peptide set overlap and the ppm shift are the meaningful comparison
   (pending in this chain).
-- The lever is the MS1 path, for BOTH inputs: parallel MS1 decode in the loader (`[SpeXtract ms1-par]`)
+- The lever is the MS1 path, for BOTH inputs: parallel MS1 decode in the loader (`[SpeXtractor ms1-par]`)
   and parallel MS1 pick in the consumer (`flushMS1_`), queued as the next timed run.
 **mzPeak input, identification (13:58):** Sage @1%: `.d` 12,217 peptides / 97,793 PSMs; mzPeak 10,785 / 89,012
 (**-11.7% peptides**; 9,987 shared, 2,230 only-.d, 798 only-mzPeak). Mass errors of accepted PSMs:
@@ -251,7 +251,7 @@ hand-off 25.0 s -> the ~380 s residual is the MS1 path on this file too.
 | spectra / digest | 922,902 / `ca1ddbbd…` | 922,902 / **`ca1ddbbd…` (byte-identical spectrum data)** |
 | Sage @1% | 12,217 | **12,217, symdiff 0** |
 Pre-registered gate (LOAD <= 45 s, stage digests identical, Sage set identical): **PASSED**. The change is
-in the OpenMS loader patch (`[SpeXtract ms1-par]`: batched parallel MS1 decode with per-thread ZSTD ctx and
+in the OpenMS loader patch (`[SpeXtractor ms1-par]`: batched parallel MS1 decode with per-thread ZSTD ctx and
 FrameCentroider, ordered hand-off) and the consumer (`flushMS1_`: parallel MS1 pick). Remaining wall is
 83% window loop; LOAD is now 4%. Baseline for the next measures: 15:21.
 **B3 CLOSED (15:14): output is identical across thread counts.** Re-digested with the fixed script: final_t8 ==
@@ -283,7 +283,7 @@ system time); adopt via `LD_PRELOAD` in the benchmark harness, link in CMake onl
 12 bands, 5.1x) and 922,899 spectra vs 922,902 -- the MS1 band partition is NOT exact (traces near band edges),
 so the knob is quality-affecting (BC-3 was right). Keep 12; drop A3(iv).
 **D1 first attempt (18:32) aborted:** the cluster copy of the dataset D archive is the --no-vendor one, so
-`vendor/analysis.tdf.gz` is absent; the loader now accepts `SPEXTRACT_MZPEAK_TDF=<sidecar>`; rerun in flight.
+`vendor/analysis.tdf.gz` is absent; the loader now accepts `SPEXTRACTOR_MZPEAK_TDF=<sidecar>`; rerun in flight.
 
 ## D1 ISOLATED (18:58): the two-point transform is 91% of the mzPeak loss; exact calibration recovers it
 | dataset D input | Sage @1% | vs `.d` (12,217) | paired precursor / fragment ppm vs the `.d` run |
@@ -291,6 +291,6 @@ so the knob is quality-affecting (BC-3 was right). Keep 12; drop A3(iv).
 | `.mzpeak`, archive two-point transform | 10,785 | −11.7% | (vs dt: +8.60 / +10.05) |
 | **`.mzpeak`, exact calibration recovered** (tof from the inverted transform + MzCalibration and Frames.T1 from the tdf) | **12,082** | **−1.1%** (symdiff 1,186 / 1,051) | **+0.00 / +0.00** — the m/z axis is identical to the `.d` path |
 The remaining −1.1% is the IM axis / band reconstruction (converter-recalibrated 1/K0 vs our rational calibration; ~1.3%
-vendor-IM effect measured on 09-01). `SPEXTRACT_MZPEAK_EXACT` is now ON by default and fails closed without a tdf
-(embedded `vendor/analysis.tdf.gz` or `SPEXTRACT_MZPEAK_TDF=` sidecar); `=0` accepts the two-point m/z explicitly.
+vendor-IM effect measured on 09-01). `SPEXTRACTOR_MZPEAK_EXACT` is now ON by default and fails closed without a tdf
+(embedded `vendor/analysis.tdf.gz` or `SPEXTRACTOR_MZPEAK_TDF=` sidecar); `=0` accepts the two-point m/z explicitly.
 Provenance: `spx:mz_calibration = tdf_table_modeltype1 (recovered from the archive's two-point transform + ...)`.

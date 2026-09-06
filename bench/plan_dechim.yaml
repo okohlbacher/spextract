@@ -7,7 +7,7 @@ title: "#1 corrected: de-chimerize the top-150 peaks (co-isolation lever), not f
 # rise, cross-precursor sharing was the gap; if they fall, redundancy is load-bearing (which is
 # what open_bench.py pre-registered) and de-chimerization is another falsified lever.
 samples: [dataset D]
-binary: /path/to/scratch/OpenMS/build/bin/spextract
+binary: /path/to/scratch/OpenMS/build/bin/spextractor
 threads: 100
 arms:
   - name: base

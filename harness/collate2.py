@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SpeXtract benchmark harness v2 -- measurement, pairing, and the publish gate.
+"""SpeXtractor benchmark harness v2 -- measurement, pairing, and the publish gate.
 
 Everything between "a sealed artifact exists" and "a number appears in the vault" lives here.
 Run identity and plan binding are bench2.py's problem; this file consumes its runset contract
@@ -2331,14 +2331,14 @@ def _selftest_integration(st, tmp):
         }
         regp = root / "samples.yaml"
         regp.write_text(yaml.safe_dump(reg, default_flow_style=False, sort_keys=True))
-        plan = {"schema": "spextract.plan/2", "title": "integration %s" % name,
+        plan = {"schema": "spextractor.plan/2", "title": "integration %s" % name,
                 "binary": str(tool), "threads": 2, "tcmalloc": False, "samples": ["dataset A"],
                 "arms": [{"name": "base", "role": "baseline", "params": {}},
                          {"name": "split", "role": "treatment", "baseline": "base",
                           "params": {"trace:ms1_split_valleys": 7.0}}]}
         planp = root / "plan.yaml"
         planp.write_text(yaml.safe_dump(plan, default_flow_style=False, sort_keys=True))
-        os.environ.update({"SPEXTRACT_REGISTRY": str(regp), "FAKETOOL_MODE": "ok",
+        os.environ.update({"SPEXTRACTOR_REGISTRY": str(regp), "FAKETOOL_MODE": "ok",
                            "FAKESAGE_MODE": "ok", "FAKETOOL_SPECTRA": "700",
                            "FAKETOOL_MZ0": "500.0", "FAKETOOL_MZSTEP": "0.02",
                            "FAKETOOL_PEAKMODE": "indexed"})
@@ -2482,7 +2482,7 @@ def _selftest_truth_e2e(st, tmp, report, lib, raw08):
 
 def cmd_selftest(args):
     require_deps()
-    tmp = Path(tempfile.mkdtemp(prefix="spextract-collate-selftest-"))
+    tmp = Path(tempfile.mkdtemp(prefix="spextractor-collate-selftest-"))
     try:
         st = selftest_collate(tmp)
         rc = st.report()

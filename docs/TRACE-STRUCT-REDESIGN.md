@@ -6,7 +6,7 @@ on the RT axis and its intensities -- not a coordinate per point. Same for the f
 ## 1. What is stored today, and why it is wrong
 
 ```cpp
-struct Trace {                       // src/spextract.cpp:243
+struct Trace {                       // src/spextractor.cpp:243
   double mz, rt, im, intensity;      //  32 B  per trace, all DERIVABLE from what follows
   uint32_t tof; double b;            //  16 B  per trace (b is the apex FRAME's factor: derivable)
   vector<uint32_t> xi;               //   4 B  per point: frame index      <- redundant

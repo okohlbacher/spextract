@@ -1,4 +1,4 @@
-# SpeXtract benchmark harness v2
+# SpeXtractor benchmark harness v2
 
 `bench2.py` produces artifacts and provenance. `collate2.py` produces numbers. Nothing else may
 write into `docs/benchmarks/`.

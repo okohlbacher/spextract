@@ -19,7 +19,7 @@ there was no speedup to trade against it either.
 
 **Fix 1 — cap the nested OpenMP team (`EpdThreadCap`).** The underlying defect is real and
 verified: `ElutionPeakDetection.cpp:328` is a bare `#pragma omp parallel for` with **no
-`num_threads`**; `spextract.cpp:1545` enables 2 active levels; `epd.detectPeaks` runs
+`num_threads`**; `spextractor.cpp:1545` enables 2 active levels; `epd.detectPeaks` runs
 inside the window loop. So 24 windows × 120 threads ≈ **2,880 threads on 120 cores**, all
 funnelling through the *program-global* critical at `ElutionPeakDetection.cpp:460/545`. That
 explains the measured 43.5% system time.
@@ -42,7 +42,7 @@ drops emissions.
 * **Both defects are real and verified in the source.** The 43.5% kernel time and the 1,993 s
   single-core tail are measured, not inferred. The *fixes* were wrong, not the diagnosis.
 * The 9.7× decomposes as **3.67× CPU × 2.64× parallelism** against the reference implementation (457 s, 38.4 cores,
-  6.8% system on the same node and `.d`). SpeXtract's *user* CPU alone would finish in ~5 min at
+  6.8% system on the same node and `.d`). SpeXtractor's *user* CPU alone would finish in ~5 min at
   120 cores — the algorithm is not 10× slow, it runs on a ninth of the machine.
 * Window `[327.52, 468.80)` holds 489,986 of 2,145,053 precursors (**23.7%**), capping the loop
   at **4.2×** by Amdahl regardless of thread count.

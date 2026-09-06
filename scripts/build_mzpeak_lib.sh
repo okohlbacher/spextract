@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the mzPeak C++ library (github.com/OpenMS/mzpeak; fork okohlbacher/mzpeak-openms trunk) for
-# SpeXtract's streaming .mzpeak input, against the SAME Arrow/Parquet/libzip OpenMS was built with.
+# SpeXtractor's streaming .mzpeak input, against the SAME Arrow/Parquet/libzip OpenMS was built with.
 #   MZPEAK_SRC   checkout of the library                     (default /path/to/scratch/mzpeak-cpp)
 #   PKGCONF      pkg-config dir with arrow/parquet/libzip .pc (default OpenMS contrib)
 #   BOOST_ROOT   Boost >= 1.89 (json, compat)                 (default: OpenDIAlyzer env on ceph)

@@ -17,7 +17,7 @@ title: "sensitivity floor: does the co-elution gate strip real fragments from FA
 # charge, de-chimerization). A rise bought by a large PSM/redundancy increase without peptide gain
 # is NOT a win -- peptides at peptide_q<=0.01 is the metric.
 samples: [dataset D]
-binary: /path/to/scratch/rv/opt/bin/spextract
+binary: /path/to/scratch/rv/opt/bin/spextractor
 threads: 128
 arms:
   - name: base

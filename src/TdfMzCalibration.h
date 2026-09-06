@@ -1,6 +1,6 @@
-#ifndef SPEXTRACT_TDF_MZ_CALIBRATION_H
-#define SPEXTRACT_TDF_MZ_CALIBRATION_H
-// Copyright (c) 2026, SpeXtract authors. BSD-3-Clause.
+#ifndef SPEXTRACTOR_TDF_MZ_CALIBRATION_H
+#define SPEXTRACTOR_TDF_MZ_CALIBRATION_H
+// Copyright (c) 2026, SpeXtractor authors. BSD-3-Clause.
 //
 // Exact TOF -> m/z conversion for Bruker TDF (timsTOF) data, ModelType 1.
 //
@@ -40,7 +40,7 @@
 #include <limits>
 #include <string>
 
-namespace spextract
+namespace spextractor
 {
 
 /// Constants as stored in the TDF `MzCalibration` row plus the per-frame digitizer temperature.
@@ -123,6 +123,6 @@ struct TdfMzCalibration
   }
 };
 
-} // namespace spextract
+} // namespace spextractor
 
-#endif // SPEXTRACT_TDF_MZ_CALIBRATION_H
+#endif // SPEXTRACTOR_TDF_MZ_CALIBRATION_H

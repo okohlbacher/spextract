@@ -1,7 +1,7 @@
 # Full benchmark matrix: all tools x all datasets x all calibration methods x both engines
 
 dataset D/dataset A/dataset B (the benchmark cohort, same cohort/instrument). Both engines deterministic (sigma=0),
-so counts are exact. SpeXtract config throughout: isotope-support gate + corr_power=2 (current
+so counts are exact. SpeXtractor config throughout: isotope-support gate + corr_power=2 (current
 defaults); only the TOF->m/z calibration path varies. the reference implementation references for dataset A/dataset B created
 2026-09-01 (previously dataset D-only).
 
@@ -97,7 +97,7 @@ residual ppm. Any future lever must report its ppm median beside its count.**
 
 ## MSFragger gap: hypothesis tests (2026-09-02)
 Post-hoc on the archived TSVs, same global raw-hyperscore 1% walk that produced the matrix:
-| | SpeXtract | the reference implementation |
+| | SpeXtractor | the reference implementation |
 |---|---|---|
 | PSM charges searched | 1+ 44,490 · 2+ 326,462 · 3+ 167,203 · 4+ 29,894 · 5+ 4,268 | 1+ 12,969 · 2+ 277,753 · 3+ 161,487 · 4+ 45,030 |
 | accepted @1%, all charges | 11,463 (threshold hyperscore **15.205**, 358,493 distinct keys) | 13,932 (threshold **14.033**, 407,432 keys) |
@@ -118,7 +118,7 @@ Post-hoc on the archived TSVs, same global raw-hyperscore 1% walk that produced 
 - **"Is there additional information MSFragger can use?" -- No.** Nothing the reference implementation writes that we
   do not is consumed by scoring. The deficit is in what we emit, not what we annotate.
 - **Charge-corruption test (override_charge=1, z=1..5 for every spectrum, both tools, 2026-09-02):**
-  SpeXtract 10,750 -> **11,238 (+488, +4.5%)**; the reference implementation 13,004 -> 13,276 (+272, +2.1%). Gap 2,254 ->
+  SpeXtractor 10,750 -> **11,238 (+488, +4.5%)**; the reference implementation 13,004 -> 13,276 (+272, +2.1%). Gap 2,254 ->
   2,038: **wrong charge labels explain ~10% of the MSFragger gap** (kimi's estimate was 16-35%). They
   cost us twice what they cost the reference implementation, so charge assignment is worth ~+490 peptides on MSFragger
   on its own; the remaining ~2,000 is tail coverage/quality of what we emit for faint precursors.

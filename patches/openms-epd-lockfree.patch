@@ -1,7 +1,7 @@
-# SpeXtract: make OpenMS ElutionPeakDetection lock-free for nested parallel callers.
+# SpeXtractor: make OpenMS ElutionPeakDetection lock-free for nested parallel callers.
 #
 # detectPeaks(vector) guarded a shared output vector with a PROGRAM-GLOBAL named critical. Called
-# from inside SpeXtract's per-band trace loop (96 concurrent callers) that one lock serialised the
+# from inside SpeXtractor's per-band trace loop (96 concurrent callers) that one lock serialised the
 # whole tool: 195M context switches, 37% system time. At top level this now collects into
 # per-thread buffers and merges; when already nested it runs serially into the caller's own vector.
 # No output vector is ever shared across threads, so the critical is unnecessary. Numerically
@@ -25,8 +25,8 @@
 -      IF_MASTERTHREAD this->setProgress(progress);
 -
 -#ifdef _OPENMP
-+    // [speXtract lock-free] The push_back below used a PROGRAM-GLOBAL named critical. Called from
-+    // inside another parallel region (speXtract's per-band trace loop, 96 concurrent callers) that
++    // [speXtractor lock-free] The push_back below used a PROGRAM-GLOBAL named critical. Called from
++    // inside another parallel region (speXtractor's per-band trace loop, 96 concurrent callers) that
 +    // one lock serialised everything -> 195M context switches, 37% system time. Fix: at TOP LEVEL,
 +    // collect into per-thread buffers and merge (no shared vector, no lock); when already NESTED,
 +    // run serially into the caller's own vector (also no sharing). detectElutionPeaks_ no longer
@@ -72,7 +72,7 @@
 -        {
 -          single_mtraces.push_back(mt);
 -        }
-+        single_mtraces.push_back(mt);   // [speXtract] lock-free: vector is thread-private
++        single_mtraces.push_back(mt);   // [speXtractor] lock-free: vector is thread-private
  
        }
      }
@@ -86,7 +86,7 @@
 -          {
 -            single_mtraces.push_back(new_mt);
 -          }
-+            single_mtraces.push_back(new_mt);   // [speXtract] lock-free: vector is thread-private
++            single_mtraces.push_back(new_mt);   // [speXtractor] lock-free: vector is thread-private
          }
        }
      }

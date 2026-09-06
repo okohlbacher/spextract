@@ -1,9 +1,9 @@
 name: full build
 
-# Builds OpenMS from source at the commit pinned in patches/openms.lock, applies the SpeXtract
+# Builds OpenMS from source at the commit pinned in patches/openms.lock, applies the SpeXtractor
 # patches, builds the tool, and runs the end-to-end suite against the binary it just built.
 #
-# SpeXtract cannot be built against a RELEASED OpenMS package, and that is a property of the tool
+# SpeXtractor cannot be built against a RELEASED OpenMS package, and that is a property of the tool
 # rather than of CI: it uses BrukerTimsFile::loadDIAStreaming and PeakPickerIM, which postdate
 # OpenMS 3.5.0, the newest tag; and it needs the two patches in patches/, one of which adds
 # BrukerTimsFile::lastMzCalibration(). Hence a source build at a pinned commit.
@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
-        with: { path: spextract }
+        with: { path: spextractor }
 
       - name: Build dependencies
         run: |
@@ -57,13 +57,13 @@ jobs:
         # change. Pass openms_ref to test against a newer commit deliberately.
         run: |
           REF="${{ github.event.inputs.openms_ref }}"
-          [ -n "$REF" ] || REF=$(sed -n 's/^OPENMS_BASE=//p' spextract/patches/openms.lock)
+          [ -n "$REF" ] || REF=$(sed -n 's/^OPENMS_BASE=//p' spextractor/patches/openms.lock)
           echo "building against OpenMS $REF"
           git clone https://github.com/OpenMS/OpenMS.git
           git -C OpenMS checkout "$REF"
 
-      - name: Apply the SpeXtract patches to OpenMS
-        run: spextract/scripts/apply_openms_patches.sh "$GITHUB_WORKSPACE/OpenMS"
+      - name: Apply the SpeXtractor patches to OpenMS
+        run: spextractor/scripts/apply_openms_patches.sh "$GITHUB_WORKSPACE/OpenMS"
 
       - name: Build OpenMS
         run: |
@@ -72,12 +72,12 @@ jobs:
             -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build OpenMS/build --target OpenMS
 
-      - name: Build SpeXtract
+      - name: Build SpeXtractor
         run: |
-          cmake -S spextract -B spextract/build -G Ninja \
+          cmake -S spextractor -B spextractor/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DOpenMS_DIR="$GITHUB_WORKSPACE/OpenMS/build" \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build spextract/build
+          cmake --build spextractor/build
 
       # OpenMS refuses to start without its share/ directory (unit definitions, CV terms). A source
       # build does not install it, so point at the tree directly. Without this the binary dies on
@@ -86,12 +86,12 @@ jobs:
         env:
           OPENMS_DATA_PATH: ${{ github.workspace }}/OpenMS/share/OpenMS
         run: |
-          spextract/build/spextract --help > help.txt 2>&1 || { cat help.txt; exit 1; }
+          spextractor/build/spextractor --help > help.txt 2>&1 || { cat help.txt; exit 1; }
           head -5 help.txt
-          grep -q '^SpeXtract' help.txt \
-            || { echo "the tool does not identify itself as SpeXtract"; cat help.txt; exit 1; }
+          grep -q '^SpeXtractor' help.txt \
+            || { echo "the tool does not identify itself as SpeXtractor"; cat help.txt; exit 1; }
 
       - name: End-to-end suite against the freshly built binary
         env:
           OPENMS_DATA_PATH: ${{ github.workspace }}/OpenMS/share/OpenMS
-        run: python3 spextract/test/test_spextract.py spextract/build/spextract
+        run: python3 spextractor/test/test_spextractor.py spextractor/build/spextractor

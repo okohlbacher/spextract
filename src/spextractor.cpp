@@ -6,7 +6,7 @@
 // $Authors: OpenMS-the reference implementation project $
 // --------------------------------------------------------------------------
 
-#include "MzPeakStreamLoad.h"   // [mzpeak] streaming .mzpeak input (SPEXTRACT_WITH_MZPEAK)
+#include "MzPeakStreamLoad.h"   // [mzpeak] streaming .mzpeak input (SPEXTRACTOR_WITH_MZPEAK)
 #include <OpenMS/APPLICATIONS/TOPPBase.h>
 
 #include <OpenMS/FORMAT/FileHandler.h>
@@ -18,7 +18,7 @@
 #include <OpenMS/FEATUREFINDER/MassTraceDetection.h>
 #include <unordered_map>
 #include <cstring>
-// spextract::TdfMzCalibration comes from <OpenMS/FORMAT/TdfMzCalibration.h>, installed by the
+// spextractor::TdfMzCalibration comes from <OpenMS/FORMAT/TdfMzCalibration.h>, installed by the
 // OpenMS patch and already included via the mzPeak loader; including the in-tree copy as well
 // redefines the struct.
 #include <OpenMS/FORMAT/TdfMzCalibration.h>
@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <type_traits>
 #include <array>
 #include <functional>
 #include <cstdio>
@@ -42,6 +43,15 @@
 #include <vector>
 #include <cstdlib>     // getenv
 #include <cstring>     // memcpy
+#ifdef __GLIBC__
+#include <malloc.h>    // mallinfo2: retained-vs-live at the milestones [mem]
+#endif
+
+// The three OpenMS patches in patches/ are build prerequisites. This is the compile-time check for the
+// third: without defaulted moves an rvalue MassTrace binds to the copy constructor (not noexcept), and
+// every "move" of a trace in the band/split gathering is a deep copy of its points.
+static_assert(std::is_nothrow_move_constructible_v<OpenMS::MassTrace> && std::is_nothrow_move_assignable_v<OpenMS::MassTrace>,
+              "OpenMS MassTrace has no noexcept move operations: apply patches/openms-masstrace-move.patch to the OpenMS tree");
 #include <exception>   // exception_ptr
 #ifdef _OPENMP
 #include <omp.h>
@@ -55,7 +65,7 @@ using namespace std;
 //-------------------------------------------------------------
 
 /**
-  @page TOPP_SpeXtract SpeXtract
+  @page TOPP_SpeXtractor SpeXtractor
 
   @brief Extracts pseudo-MS/MS ("pseudo-DDA") spectra from diaPASEF (ion-mobility DIA) data.
 
@@ -74,9 +84,9 @@ using namespace std;
   for the adversarial reviews.
 
   <B>The command line parameters of this tool are:</B>
-  @verbinclude TOPP_SpeXtract.cli
+  @verbinclude TOPP_SpeXtractor.cli
   <B>INI file documentation of this tool:</B>
-  @htmlinclude TOPP_SpeXtract.html
+  @htmlinclude TOPP_SpeXtractor.html
 */
 
 /// @cond TOPPCLASSES
@@ -164,8 +174,20 @@ namespace
   std::atomic<long long> stat_prec_{0};     ///< precursors scored
   bool var_support_ = false;         ///< [Q1] Pearson variance over union support, not full grid G (0-pad fix)
   double corr_power_ = 0.0;          ///< [Q2] emitted fragment intensity *= corr^corr_power (0=off; engine-agnostic)
-  bool drop_prec_iso_ = std::getenv("SPEXTRACT_DROP_PREC_ISO") != nullptr;   ///< [C9 A/B] drop precursor M+1..M+3 from fragment lists
+  bool drop_prec_iso_ = std::getenv("SPEXTRACTOR_DROP_PREC_ISO") != nullptr;   ///< [C9 A/B] drop precursor M+1..M+3 from fragment lists
 
+  /// glibc arena accounting at a milestone: what the allocator holds in arenas vs mmapped blocks
+  /// and how much of it is free-but-retained. RSS alone cannot tell live data from retained pages.
+  static std::string mem_()
+  {
+#ifdef __GLIBC__
+    const struct mallinfo2 mi = mallinfo2();
+    return " [malloc arena=" + std::to_string(mi.arena >> 20) + " MB mmap=" + std::to_string(mi.hblkhd >> 20)
+         + " MB free=" + std::to_string(mi.fordblks >> 20) + " MB]";
+#else
+    return "";
+#endif
+  }
   static std::string rss_()
   {
     std::ifstream st("/proc/self/status");
@@ -617,7 +639,7 @@ namespace
   /// is one.
   struct TofAxis
   {
-    spextract::TdfMzCalibration cal;
+    spextractor::TdfMzCalibration cal;
     vector<double> b_by_frame;        ///< frame factor per FRAME ID (index 0 unused, as in the tdf)
     bool ok = false;
 
@@ -652,7 +674,7 @@ namespace
     TofAxis& ax = tofAxis();
     ax.ok = false;
     std::vector<double> t1;
-    if (!spextract::loadTdfCalibration(tdf_path, ax.cal, t1, why)) return false;
+    if (!spextractor::loadTdfCalibration(tdf_path, ax.cal, t1, why)) return false;
     ax.b_by_frame.assign(t1.size(), 0.0);
     for (size_t i = 1; i < t1.size(); ++i) ax.b_by_frame[i] = ax.cal.frameFactor(t1[i]);
     // Frames the tdf did not list keep the reference factor rather than a zero -- but index 0
@@ -747,7 +769,7 @@ namespace
 
 
   /// [det] Order-insensitive 64-bit digest of a stage's numeric output, for localising
-  /// run-to-run nondeterminism: sort the bit patterns, then FNV-1a. Logged under SPEXTRACT_DET=1.
+  /// run-to-run nondeterminism: sort the bit patterns, then FNV-1a. Logged under SPEXTRACTOR_DET=1.
   static uint64_t detDigest_(vector<uint64_t> bits)
   {
     std::sort(bits.begin(), bits.end());
@@ -755,7 +777,7 @@ namespace
     for (uint64_t b : bits) { h ^= b; h *= 1099511628211ULL; }
     return h;
   }
-  static bool detOn_() { static const bool on = std::getenv("SPEXTRACT_DET") != nullptr; return on; }
+  static bool detOn_() { static const bool on = std::getenv("SPEXTRACTOR_DET") != nullptr; return on; }
   static uint64_t traceDigest_(const vector<Trace>& ts)
   {
     vector<uint64_t> b; b.reserve(ts.size() * 3);
@@ -783,6 +805,24 @@ namespace
     size_t frames() const { return rt_index.size(); }
     size_t peaks()  const { return tof.size(); }
   };
+
+  /// Ordered, incremental digest of a window's slab: frame table (rt index, factor bits, count) then
+  /// every (tof, intensity bits, imq) tuple in frame order. Unlike detDigest_ it is NOT sorted, so a
+  /// reordered equal-intensity peak or a tuple swapped between frames changes it -- which is what a
+  /// representation change of the store must not do. [det]
+  static uint64_t slabDigest_(const PeakSlab& sl)
+  {
+    uint64_t h = 1469598103934665603ULL;
+    auto mix = [&](uint64_t v) { h ^= v; h *= 1099511628211ULL; };
+    for (size_t f = 0; f < sl.frames(); ++f)
+    {
+      uint64_t bb; std::memcpy(&bb, &sl.b[f], 8);
+      mix(sl.rt_index[f]); mix(bb); mix(sl.frame_off[f + 1] - sl.frame_off[f]);
+      for (uint32_t k = sl.frame_off[f]; k < sl.frame_off[f + 1]; ++k)
+      { uint32_t ib; std::memcpy(&ib, &sl.inten[k], 4); mix(sl.tof[k]); mix(ib); mix(sl.imq[k]); }
+    }
+    return h;
+  }
 
   /// Move a window's compact frames into a slab, consuming them as it goes (the compact store has
   /// to shrink in step, exactly as materializeWindow does, or the two representations coexist).
@@ -996,10 +1036,10 @@ namespace
           if (!d.active) continue;
           if (side == 0 ? !(fi > 0) : !(fi + 1 < (long)F)) continue;
           const size_t f = (size_t)(side == 0 ? fi - 1 : fi + 1);
-          // "empty" AFTER sub-noise deletion, as OpenMS tests it. SPEXTRACT_INT_EMPTY_RAW=1 tests
+          // "empty" AFTER sub-noise deletion, as OpenMS tests it. SPEXTRACTOR_INT_EMPTY_RAW=1 tests
           // raw emptiness instead: the A/B that attributes the 12,650 -> 12,466 move between the
           // two corrected versions, which is the only semantic change between them.
-          static const bool empty_raw = std::getenv("SPEXTRACT_INT_EMPTY_RAW") != nullptr;
+          static const bool empty_raw = std::getenv("SPEXTRACTOR_INT_EMPTY_RAW") != nullptr;
           if (empty_raw ? (sl.frame_off[f + 1] > sl.frame_off[f]) : (bool)tp.frame_live[f])
           {
             bool taken = false;
@@ -1008,7 +1048,7 @@ namespace
             // over-length trace that is thrown away also throws away every peak in it, which is
             // why trace:max_trace_length_sec is falsified. Here the trace simply stops growing and
             // ElutionPeakDetection still splits what was found.
-            static const bool span_terminate = std::getenv("SPEXTRACT_SPAN_TERMINATE") != nullptr;
+            static const bool span_terminate = std::getenv("SPEXTRACTOR_SPAN_TERMINATE") != nullptr;
             if (span_terminate && k >= 0 && max_span_sec > 0.0)
             {
               const uint32_t nlo = std::min(sfmin, (uint32_t)f), nhi = std::max(sfmax, (uint32_t)f);
@@ -1248,13 +1288,13 @@ namespace
       std::vector<CompactFrame> compacted((size_t)n);
       std::vector<CompactStats> st((size_t)n);          // per-frame stats, merged serially below
       PeakPickerIM picker = picker_;                    // Param is a deep-copy value type
-      // SPEXTRACT_PICK_SERIAL=1 runs this loop on one thread: the A/B that separates picker
+      // SPEXTRACTOR_PICK_SERIAL=1 runs this loop on one thread: the A/B that separates picker
       // scheduling-sensitivity from downstream chaos (kimi, plan review). [pick-det]
-      static const bool par_pick = std::getenv("SPEXTRACT_PICK_SERIAL") == nullptr;
-      static const bool sched_set = []{ const bool st = std::getenv("SPEXTRACT_PICK_STATIC") != nullptr; omp_set_schedule(st ? omp_sched_static : omp_sched_dynamic, st ? 0 : 1); return true; }(); (void)sched_set;
+      static const bool par_pick = std::getenv("SPEXTRACTOR_PICK_SERIAL") == nullptr;
+      static const bool sched_set = []{ const bool st = std::getenv("SPEXTRACTOR_PICK_STATIC") != nullptr; omp_set_schedule(st ? omp_sched_static : omp_sched_dynamic, st ? 0 : 1); return true; }(); (void)sched_set;
       std::exception_ptr pick_err;                      // an exception escaping an OMP region aborts
       // chunk 1: with chunk 8 a 64-frame batch made only 8 chunks = 8 workers (codex, plan review)
-      #pragma omp parallel for firstprivate(picker) schedule(runtime) if(par_pick)   // SPEXTRACT_PICK_STATIC=1 -> static (history-vs-race probe)
+      #pragma omp parallel for firstprivate(picker) schedule(runtime) if(par_pick)   // SPEXTRACTOR_PICK_STATIC=1 -> static (history-vs-race probe)
       for (int i = 0; i < n; ++i)
       {
         try
@@ -1341,7 +1381,7 @@ namespace
   private:
     /// deliberate: 256 frames is ~1 GB of raw buffer at ~37k peaks/frame -- 2.5 work items per
     /// thread at 100 threads (64 gave 8 chunks of 8 = 8 workers), small next to the 12 GB compact
-    /// store. SPEXTRACT_PICK_BATCH overrides for the sweep.
+    /// store. SPEXTRACTOR_PICK_BATCH overrides for the sweep.
     static const size_t kBatch;
     std::vector<MapType::SpectrumType> buf_;
     std::vector<WinKey> key_;
@@ -1353,7 +1393,7 @@ namespace
     std::function<WinKey(double, double, uint32_t)> keyfn_;
   };
   const size_t PickCompactConsumer::kBatch =
-    std::getenv("SPEXTRACT_PICK_BATCH") ? (size_t)std::atoi(std::getenv("SPEXTRACT_PICK_BATCH")) : 256;
+    std::getenv("SPEXTRACTOR_PICK_BATCH") ? (size_t)std::atoi(std::getenv("SPEXTRACTOR_PICK_BATCH")) : 256;
 
   /// [wavelet] Stationary ("a trous") B3-spline wavelet smoothing of an elution profile.
   ///
@@ -1481,15 +1521,15 @@ namespace
   }
 }
 
-class TOPPSpeXtract : public TOPPBase
+class TOPPSpeXtractor : public TOPPBase
 {
 public:
-  TOPPSpeXtract() :
-    // official=false: SpeXtract is a STANDALONE tool that links against OpenMS, not a tool IN
+  TOPPSpeXtractor() :
+    // official=false: SpeXtractor is a STANDALONE tool that links against OpenMS, not a tool IN
     // OpenMS, so it is deliberately absent from ToolHandler's official list. TOPPBase rejects an
     // unregistered name when official is left true -- which is how the rename surfaced that the
     // old name had been passing itself off as an official TOPP tool.
-    TOPPBase("SpeXtract", "Extracts pseudo-MS/MS spectra from diaPASEF (ion-mobility DIA) data.", false)
+    TOPPBase("SpeXtractor", "Extracts pseudo-MS/MS spectra from diaPASEF (ion-mobility DIA) data.", false)
   {
   }
 
@@ -1497,7 +1537,7 @@ protected:
   void registerOptionsAndFlags_() override
   {
     registerInputFile_("in", "<file>", "", "Input diaPASEF data (ion-mobility DIA; 1/K0 / VSSC): mzML, mzPeak, or a Bruker .d directory.");
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
     setValidFormats_("in", {"mzML", "mzpeak", "d"});
 #else
     setValidFormats_("in", {"mzML", "d"});      // stock OpenMS does not know the mzpeak format
@@ -1506,7 +1546,7 @@ protected:
                         "EXTENSION: .mzpeak (default) or .mzML. mzPeak is columnar and much smaller; "
                         "mzML is what DDA search engines read today, so pass an .mzML name (or "
                         "-out_type mzML) if the next step is a search.");
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
     setValidFormats_("out", {"mzpeak", "mzML"});
 #else
     setValidFormats_("out", {"mzML"});
@@ -1575,7 +1615,7 @@ protected:
                           "gradient, while real chromatographic peaks here are 5-30 s -- so what a 120 s cap removes "
                           "is the far tail of a blob ElutionPeakDetection did not split. Trimming AFTER the fact is "
                           "deliberate: it leaves detection's peak ownership untouched, unlike terminating extension "
-                          "(SPEXTRACT_SPAN_TERMINATE=1, diagnostic), and unlike trace:max_trace_length_sec, which "
+                          "(SPEXTRACTOR_SPAN_TERMINATE=1, diagnostic), and unlike trace:max_trace_length_sec, which "
                           "DISCARDS an over-length trace and deletes all signal at that m/z (falsified). 0 = no cap. "
                           "CHANGES OUTPUT.", false);
     setMinFloat_("trace:max_span_sec", 0.0);
@@ -2374,7 +2414,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         const Trace& f = frag_traces[fi];
         if (fabs(f.mz - pc.mono_mz) < 0.01) continue;                  // exclude precursor peak [M-7]
         // [C9 A/B, 2026-09-02] 28% of emitted spectra carry the precursor's M+1 and 25% its M+2 as
-        // "fragments" (unfragmented survivors). SPEXTRACT_DROP_PREC_ISO=1 drops M+1..M+3 (z known) too.
+        // "fragments" (unfragmented survivors). SPEXTRACTOR_DROP_PREC_ISO=1 drops M+1..M+3 (z known) too.
         if (drop_prec_iso_ && pc.charge > 0)
         {
           bool iso = false;
@@ -2760,18 +2800,18 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       Param sp = spicker.getParameters();
       sp.setValue("pickIMCluster:im_tolerance_cluster", getDoubleOption_("gate:delta_im"));
       sp.setValue("pickIMCluster:ppm_tolerance_cluster", getDoubleOption_("trace:mass_error_ppm"));
-      if (const char* m = std::getenv("SPEXTRACT_PICK_MZ_MODE")) sp.setValue("pickIMCluster:mz_mode", std::string(m));   // [C2 pick-level A/B] weighted|seed|top3
+      if (const char* m = std::getenv("SPEXTRACTOR_PICK_MZ_MODE")) sp.setValue("pickIMCluster:mz_mode", std::string(m));   // [C2 pick-level A/B] weighted|seed|top3
       spicker.setParameters(sp);
       PickCompactConsumer consumer(spicker, ms2_by_window, ms1_map, cstat, winKey);
       try
       {
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
         if (FileHandler::getTypeByFileName(in) == FileTypes::MZPEAK)
 #else
         if (false)
 #endif
         {
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
           spx::loadMzPeakStreaming(in, consumer, n_threads_req);   // consumer counts frames itself
 #else
           throw Exception::NotImplemented(__FILE__, __LINE__, "streaming .mzpeak input needs a build with -DMZPEAK_ROOT");
@@ -2784,11 +2824,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         phase_stats_()["LOAD(stream)"].rss_end_mb = rss_mb_();
         if (phase_stats_()["LOAD(stream)"].n++ == 0) phase_order_().push_back("LOAD(stream)");
         writeLogInfo_("[perf-load] pick(flush) wall=" + String(flush_wall_(), 1) + " s inside LOAD(stream)");
-        if (std::getenv("SPEXTRACT_LOAD_ONLY")) { report_phases_(phase_clock_()); return EXECUTION_OK; }   // [perf-load] decode/hand-off/pick split only
+        if (std::getenv("SPEXTRACTOR_LOAD_ONLY")) { report_phases_(phase_clock_()); return EXECUTION_OK; }   // [perf-load] decode/hand-off/pick split only
         writeLogInfo_("[stream] frame-by-frame load done: " + String(consumer.frames_seen)
                       + " frames, MS1 " + String(ms1_map.size()) + ", windows "
                       + String(ms2_by_window.size()) + " (native ms2_neighbors="
-                      + String(cfg.dia_ms2_n_neighbors) + ")" + clk_() + rss_());
+                      + String(cfg.dia_ms2_n_neighbors) + ")" + clk_() + rss_() + mem_());
       }
       catch (const Exception::BaseException& e)
       {
@@ -2801,7 +2841,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     {
       Phase _ph("LOAD(full)");
       FileHandler().loadExperiment(in, exp,
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
                                    {FileTypes::MZML, FileTypes::MZPEAK, FileTypes::BRUKER_TDF},
 #else
                                    {FileTypes::MZML, FileTypes::BRUKER_TDF},
@@ -2822,7 +2862,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       IMFormat imf = IMTypes::determineIMFormat(exp, 1);
       if (imf == IMFormat::NONE)
       {
-        writeLogError_("Error: input has no ion-mobility data at MS1. SpeXtract requires diaPASEF (IM DIA) input.");
+        writeLogError_("Error: input has no ion-mobility data at MS1. SpeXtractor requires diaPASEF (IM DIA) input.");
         return ILLEGAL_PARAMETERS;
       }
     }
@@ -2895,9 +2935,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
                       + " bad_im=" + String(cstat.bad_im) + " (kept " + String(cstat.kept) + ") -- if this is"
                       + " nonzero the compact store is NOT lossless and results differ from the old path.");
       }
+      size_t ms1_pk = 0; for (const auto& sp : ms1_map) ms1_pk += sp.size();
       writeLogInfo_("Split into MS1 + " + String(ms2_by_window.size()) + " windows (picked); compact store "
                     + String(cb / (1024ULL * 1024ULL)) + " MB for " + String(cp) + " peaks (~"
-                    + String(cp ? (double)cb / cp : 0.0) + " B/peak)." + clk_() + rss_()); // [mem]
+                    + String(cp ? (double)cb / cp : 0.0) + " B/peak); MS1 " + String(ms1_map.size()) + " frames / "
+                    + String(ms1_pk) + " peaks (" + String(ms1_pk * 20 / (1024ULL * 1024ULL)) + " MB as PeakMap)." + clk_() + rss_() + mem_()); // [mem]
     }
 
     if (ms1_map.empty())
@@ -3141,21 +3183,21 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         writeLogInfo_("charge:min_charge=" + String(zmin) + ": dropped " + String(before - precursors.size())
                       + " precursors below that charge, " + String(precursors.size()) + " remain");
     }
-    // [step-02 emission-controlled arm, 2026-09-02] SPEXTRACT_MIN_ISOTOPES=k keeps only precursors whose
+    // [step-02 emission-controlled arm, 2026-09-02] SPEXTRACTOR_MIN_ISOTOPES=k keeps only precursors whose
     // envelope has >= k isotope peaks (n_isotopes counts the mono): a precursor QUALITY gate that cuts
     // emission without touching fragment sharing. Pre-registered falsifier in dataset D-BASELINE.
-    if (const char* mi = std::getenv("SPEXTRACT_MIN_ISOTOPES"))
+    if (const char* mi = std::getenv("SPEXTRACTOR_MIN_ISOTOPES"))
     {
       const int k = std::atoi(mi); const size_t before = precursors.size();
       precursors.erase(std::remove_if(precursors.begin(), precursors.end(),
                        [k](const Precursor_& pc){ return pc.n_isotopes < k; }), precursors.end());
-      writeLogInfo_("SPEXTRACT_MIN_ISOTOPES=" + String(k) + ": dropped " + String(before - precursors.size())
+      writeLogInfo_("SPEXTRACTOR_MIN_ISOTOPES=" + String(k) + ": dropped " + String(before - precursors.size())
                     + " precursors with fewer isotope peaks, " + String(precursors.size()) + " remain");
     }
-    // [step-02 sub-arm 2] SPEXTRACT_PRECURSOR_LIST=<tsv: rt_sec mz z, header line> keeps only precursors that
+    // [step-02 sub-arm 2] SPEXTRACTOR_PRECURSOR_LIST=<tsv: rt_sec mz z, header line> keeps only precursors that
     // MATCH a listed one (|dRT| <= 10 s, |dm/z| <= 10 ppm, same z or listed z == 0). With the reference implementation's own
     // precursor list this is the precursor-matched sub-arm: identical precursor population, our spectra.
-    if (const char* pl = std::getenv("SPEXTRACT_PRECURSOR_LIST"))
+    if (const char* pl = std::getenv("SPEXTRACTOR_PRECURSOR_LIST"))
     {
       struct Ref { double mz, rt; int z; };
       std::vector<Ref> refs; std::ifstream f(pl); std::string line; std::getline(f, line);   // header
@@ -3168,7 +3210,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         for (auto it = lo; it != refs.end() && it->mz <= pc.mono_mz + tol; ++it)
           if (std::fabs(it->rt - pc.rt) <= 10.0 && (it->z == 0 || pc.charge == 0 || it->z == pc.charge)) return false;
         return true; }), precursors.end());
-      writeLogInfo_("SPEXTRACT_PRECURSOR_LIST: " + String(refs.size()) + " reference precursors; kept "
+      writeLogInfo_("SPEXTRACTOR_PRECURSOR_LIST: " + String(refs.size()) + " reference precursors; kept "
                     + String(precursors.size()) + " of " + String(before) + " (matched within 10 s / 10 ppm / z)");
     }
     // [ms1-funnel] Measured recall against a DIA-NN truth set is 74.3% vs the reference implementation's 84.4%, but a
@@ -3255,7 +3297,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       // would double the MS1 arena at exactly the moment it is largest) and in OFFSET order -- see
       // compactUnreferenced() for why container order corrupted ~1% of the kept spans.
       const Size freed = compactUnreferenced(ms1_traces, ms1_store, needed);
-      writeLogInfo_("Released XICs of " + String(freed) + " unreferenced MS1 traces." + rss_());
+      writeLogInfo_("Released XICs of " + String(freed) + " unreferenced MS1 traces." + rss_() + mem_());
     }
     writeLogInfo_(clk_() + " Detected " + String(ms1_traces.size()) + " MS1 traces -> " + String(precursors.size())
                   + " precursor hypotheses (" + String(n_default) + " assigned default charge)." + rss_());
@@ -3364,12 +3406,12 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     if (integer_detector && !tofAxis().ok)
     {
       // The flight-time axis comes from the input's own analysis.tdf: a .d directory has one, and an
-      // mzPeak archive can be accompanied by one (SPEXTRACT_MZPEAK_TDF, as the exact-calibration
+      // mzPeak archive can be accompanied by one (SPEXTRACTOR_MZPEAK_TDF, as the exact-calibration
       // path already uses).
       why = "no candidate tdf";
       std::vector<std::string> cand;
       cand.push_back(in + "/analysis.tdf");
-      if (const char* sc = std::getenv("SPEXTRACT_MZPEAK_TDF")) cand.push_back(sc);
+      if (const char* sc = std::getenv("SPEXTRACTOR_MZPEAK_TDF")) cand.push_back(sc);
       for (const std::string& c : cand)
         if (loadTofAxis(c, why)) { writeLogInfo_("flight-time axis from " + c + ": "
               + String(tofAxis().b_by_frame.size()) + " frame factors"); break; }
@@ -3419,7 +3461,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     };
     writeLogInfo_("Processing " + String(window_list.size()) + " isolation windows (OpenMP over windows, <="
                   + String(n_conc) + " concurrent, admission bounded by " + String((int)(mem_frac * 100))
-                  + "% of free RAM)..." + rss_());
+                  + "% of free RAM)..." + rss_() + mem_());
 
     // [timers] phase_clock_ is never called between the start of this loop and its end, so
     // EVERYTHING said about where the loop's 85.9% goes has been inference. Two performance
@@ -3427,6 +3469,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     // are atomic nanosecond accumulators -- one add per stage per window, so the measurement
     // cost is unmeasurable against stages that run for minutes.
     std::atomic<long long> t_mat{0}, t_trace{0}, t_grid{0}, t_score{0}, t_emit{0};
+    std::atomic<bool> span_logged{false};
     // [master/worker, 2026-09-03] The loop used to be `parallel for num_threads(n_conc)` with
     // nested `parallel for num_threads(n_bands)` inside, i.e. a RIGID n_conc x n_bands grid
     // (8 x 12 = 96 of 100 threads). Two costs followed from the rigidity: the grid never fills the
@@ -3468,6 +3511,16 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         struct Release { std::atomic<size_t>& c; size_t n; ~Release() { c -= n; } } rel{inflight, need};
+        // Per-window stage seconds and the completion line, printed on EVERY exit of the body
+        // (empty window, any assembly arm, exception): what the profile could only infer. [mem]
+        double w_prep = 0, w_trace = 0, w_split = 0, w_score = 0, w_emit = 0;
+        auto secs = [](auto d) { return std::chrono::duration<double>(d).count(); };
+        struct WinDone { std::function<void()> f; ~WinDone() { f(); } } win_done_guard{[&]() {
+          #pragma omp critical(winlog)
+          writeLogInfo_("  window " + String(++win_done) + "/" + String(window_list.size()) + " " + String(win_lo) + "-" + String(win_hi)
+                        + ": prep " + String(w_prep) + " s | trace " + String(w_trace) + " s | split " + String(w_split)
+                        + " s | score " + String(w_score) + " s | emit " + String(w_emit) + " s | spectra " + String(win_out[wi].size()) + clk_());
+        }};
         // [compact] materialise ONLY this window, and free its compact frames as we go
         auto _t0 = std::chrono::steady_clock::now();
         // The integer detector reads the compact store directly; only the OpenMS path needs the
@@ -3477,6 +3530,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         if (integer_detector)
         {
           wslab = toSlab(*window_list[wi].second);
+          if (detOn_())
+          {
+            #pragma omp critical
+            writeLogInfo_("[det] window " + String(win_lo) + "-" + String(win_hi) + " slab n=" + String(wslab.peaks()) + " digest=" + String(slabDigest_(wslab)));
+          }
         }
         else
         {
@@ -3534,10 +3592,13 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           TofIdx tlo = 0xFFFFFFFFu, thi = 0;
           for (TofIdx t : wslab.tof) { tlo = std::min(tlo, t); thi = std::max(thi, t); }
           const int nb = std::max(1, w_bands);
+          size_t n_seeds = 0, n_parents = 0;
+          const size_t n_peaks = wslab.peaks();
           {
+          auto _tp = std::chrono::steady_clock::now();
           const TracePrep tprep = prepareTracing(wslab, ms2_noise, ms2_snr);   // once per window
-          writeLogInfo_("[mem] window " + String(win_lo) + "-" + String(win_hi) + ": seeds " + String(tprep.order.size())
-                        + " of " + String(wslab.peaks()) + " peaks (" + String((int)(1000.0 * tprep.order.size() / std::max<size_t>(wslab.peaks(), 1)) / 10.0) + "%)");
+          w_prep = secs(std::chrono::steady_clock::now() - _tp);
+          n_seeds = tprep.order.size();
           // Each band appends spans to a PRIVATE store; after the taskloop joins, the window
           // store absorbs them in band order and every offset is rebased (R4 sequencing).
           vector<TraceStore> bst(std::max(1, nb));
@@ -3560,6 +3621,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
             { tot += per[b].size(); arena += bst[b].inten.size(); any_bins |= !bst[b].bins.empty(); }
             frag_traces.reserve(tot);
             wst.inten.reserve(arena); if (any_bins) wst.bins.reserve(arena);   // as in splitIntegerTraces
+            writeLogInfo_("[mem] window " + String(win_lo) + "-" + String(win_hi) + " merge: " + String(nb) + " band arenas, "
+                          + String(arena) + " floats (" + String(arena * (any_bins ? 8 : 4) / (1024ULL * 1024ULL)) + " MB) x2 while absorbed, " + String(tot) + " traces");
             for (int b = 0; b < nb; ++b)
             {
               const uint32_t base = wst.absorb(bst[b]);
@@ -3580,10 +3643,18 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           // The same valley-splitting step the OpenMS path runs; skipping it was one of the
           // defects behind the first version's 92% peptide loss. It rebuilds the arena, so the
           // store pointers are set again afterwards; the per-frame bins are dead after it.
+          n_parents = frag_traces.size();
+          auto _ts = std::chrono::steady_clock::now();
           frag_traces = splitIntegerTraces(frag_traces, ms2_split, wst, std::max(1, w_bands) * 4);
+          w_split = secs(std::chrono::steady_clock::now() - _ts);
           for (auto& t : frag_traces) t.st = &wst;
           if (max_span > 0.0) for (auto& t : frag_traces) trimToSpan(t, max_span);
           vector<uint32_t>().swap(wst.bins);
+          writeLogInfo_("[mem] window " + String(win_lo) + "-" + String(win_hi) + ": seeds " + String(n_seeds) + " of " + String(n_peaks)
+                        + " peaks (" + String((int)(1000.0 * n_seeds / std::max<size_t>(n_peaks, 1)) / 10.0) + "%); traces " + String(n_parents)
+                        + " -> " + String(frag_traces.size()) + " (cap " + String(frag_traces.capacity()) + ", "
+                        + String(frag_traces.capacity() * sizeof(Trace) / (1024ULL * 1024ULL)) + " MB); arena " + String(wst.inten.size()) + "/"
+                        + String(wst.inten.capacity()) + " floats (" + String(wst.inten.capacity() * 4 / (1024ULL * 1024ULL)) + " MB)" + rss_());
         }
         else
         {
@@ -3602,10 +3673,9 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           writeLogInfo_("[det] window " + String(win_lo) + "-" + String(win_hi) + " frag traces n=" + String(frag_traces.size()) + " digest=" + String(traceDigest_(frag_traces)));
         }
         // (compact frames already released inside materializeWindow) [par-Crit-3]
-        #pragma omp critical
-        {
-          if (win_done == 0) writeLogInfo_("MS2 " + ms2_span); // [merged-trace]
-          writeLogInfo_("  window " + String(++win_done) + "/" + String(window_list.size()));
+        if (!span_logged.exchange(true)) { // [merged-trace] one window's span statistics, once
+          #pragma omp critical
+          writeLogInfo_("MS2 " + ms2_span);
         }
 
         frag_traces.erase(remove_if(frag_traces.begin(), frag_traces.end(), [](const Trace& t) {
@@ -3627,6 +3697,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         // window's precursors (this window runs on one thread). [perf]
         auto _t3 = std::chrono::steady_clock::now();
         t_trace += std::chrono::duration_cast<std::chrono::nanoseconds>(_t3 - _t2).count();
+        w_trace = secs(_t3 - _t2) - w_prep - w_split;
         FragStats fg = buildFragStats(frag_traces, wst, ms1_store, delta_rt);
         auto _t4 = std::chrono::steady_clock::now();
         t_grid += std::chrono::duration_cast<std::chrono::nanoseconds>(_t4 - _t3).count();
@@ -3727,9 +3798,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           }
           auto _t6 = std::chrono::steady_clock::now();
           t_score += std::chrono::duration_cast<std::chrono::nanoseconds>(_t6 - _t5).count();
+          w_score = secs(_t6 - _t5);
           for (auto& s : pslot) if (!s.empty()) bucket.push_back(std::move(s));
-          t_emit += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                      std::chrono::steady_clock::now() - _t6).count();
+          const auto _t7 = std::chrono::steady_clock::now();
+          t_emit += std::chrono::duration_cast<std::chrono::nanoseconds>(_t7 - _t6).count();
+          w_emit = secs(_t7 - _t6);
         }
         else
         {
@@ -3819,7 +3892,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
 
     { auto& st = phase_stats_()["WINDOW_LOOP"]; if (st.n++ == 0) phase_order_().push_back("WINDOW_LOOP");
       st.wall += phase_clock_() - _t_win; st.cpu += cpu_seconds_() - _c_win; st.rss_end_mb = rss_mb_(); }
-    writeLogInfo_("All windows done." + clk_() + rss_()); // parallel-phase peak? [mem]
+    writeLogInfo_("All windows done." + clk_() + rss_() + mem_()); // parallel-phase peak? [mem]
     {
       // These are CPU-seconds summed across threads, not wall time -- a stage that runs on 20
       // threads contributes 20x its wall. That is the right denominator for "where does the work
@@ -4091,7 +4164,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     // The value travels ON THE LOADED EXPERIMENT (set by BrukerTimsFile), not through a header
     // static: an inline static can be duplicated across a shared-library boundary, in which case
     // the tool would read its own copy and always report "unset" [vibe/claude review 2026-09-01].
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
     if (FileHandler::getTypeByFileName(in) == FileTypes::MZPEAK)
       out_exp.setMetaValue("spx:mz_calibration", spx::lastMzPeakCalibration());   // [codex #13] not BrukerTimsFile's state
     else
@@ -4106,7 +4179,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     // `-out pseudo.mzML` means; -out_type overrides it; mzPeak is the default when neither says.
     FileTypes::Type out_type = FileTypes::MZML;
     const String out_type_opt = getStringOption_("out_type");
-#ifdef SPEXTRACT_WITH_MZPEAK
+#ifdef SPEXTRACTOR_WITH_MZPEAK
     if (!out_type_opt.empty())
       { String t = out_type_opt; t.toLower(); out_type = (t == "mzml") ? FileTypes::MZML : FileTypes::MZPEAK; }
     else
@@ -4140,6 +4213,6 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
 
 int main(int argc, const char** argv)
 {
-  TOPPSpeXtract tool;
+  TOPPSpeXtractor tool;
   return tool.main(argc, argv);
 }

@@ -12,7 +12,7 @@ title: "co-elution gate: locate the optimum -- the sweep is still rising at 0.50
 # our PSM/peptide ratio) and that mechanism must be understood before shipping a value.
 # Adoption still requires replication on dataset B/dataset A regardless.
 samples: [dataset D]
-binary: /path/to/scratch/rv/opt/bin/spextract
+binary: /path/to/scratch/rv/opt/bin/spextractor
 threads: 128
 arms:
   - name: base

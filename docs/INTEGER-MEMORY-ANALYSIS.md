@@ -1,6 +1,6 @@
 # Where the integer detector's memory goes
 
-**Method.** A byte ledger over the window loop's data structures (`SPEXTRACT_MEM_LEDGER=1`,
+**Method.** A byte ledger over the window loop's data structures (`SPEXTRACTOR_MEM_LEDGER=1`,
 `MemGuard` RAII around each allocation), recording PEAK CONCURRENT bytes per structure rather than a
 sum over time -- windows and their band tasks run at once, so simultaneity is the whole question.
 Measured on dataset D, 100 threads, 128-core node, `trace:detector=integer`. Process peak RSS 105 GB.

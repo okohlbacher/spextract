@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SpeXtract benchmark harness v2 -- run identity, plan binding, artifact production.
+"""SpeXtractor benchmark harness v2 -- run identity, plan binding, artifact production.
 
 This file produces ARTIFACTS and PROVENANCE. It computes no measurements; every number lives in
 collate2.py. The separation is deliberate: the failure class this rewrite exists to kill is
@@ -593,9 +593,9 @@ def load_registry():
         import yaml
     except ImportError:
         die("G-B00", "need pyyaml: python3 -m pip install --user pyyaml")
-    # $SPEXTRACT_REGISTRY exists so --selftest can stand up a synthetic registry. It is NOT a
+    # $SPEXTRACTOR_REGISTRY exists so --selftest can stand up a synthetic registry. It is NOT a
     # general escape hatch: the runset records which registry projection every cell used.
-    path = Path(os.environ.get("SPEXTRACT_REGISTRY") or (HERE / "samples.yaml"))
+    path = Path(os.environ.get("SPEXTRACTOR_REGISTRY") or (HERE / "samples.yaml"))
     if not path.exists():
         die("G-B00", "registry not found: %s" % path)
     reg = yaml.safe_load(path.read_text())
@@ -758,8 +758,8 @@ def load_plan(path, reg):
     for key in ("schema", "title", "binary", "samples", "arms"):
         if key not in raw:
             die("G-B01", "plan lacks required key '%s'" % key)
-    if raw["schema"] != "spextract.plan/2":
-        die("G-B01", "plan schema is %r; this harness reads only 'spextract.plan/2'. There is no "
+    if raw["schema"] != "spextractor.plan/2":
+        die("G-B01", "plan schema is %r; this harness reads only 'spextractor.plan/2'. There is no "
                      "forward-compatibility guessing." % raw["schema"])
 
     samples = raw["samples"]
@@ -1369,9 +1369,9 @@ def ledger_count(bench, plan_normalized_sha256):
 
 # ------------------------------------------------------------------------------------- stages
 def bench_root_from(reg, override=None):
-    root = override or os.environ.get("SPEXTRACT_BENCH_ROOT") or reg.get("bench_root")
+    root = override or os.environ.get("SPEXTRACTOR_BENCH_ROOT") or reg.get("bench_root")
     if not root:
-        die("G-B00", "no bench root: set `bench_root:` in samples.yaml or $SPEXTRACT_BENCH_ROOT")
+        die("G-B00", "no bench root: set `bench_root:` in samples.yaml or $SPEXTRACTOR_BENCH_ROOT")
     return Path(root)
 
 
@@ -1458,7 +1458,7 @@ def do_adopt(bench, plan, reg, sample, arm, refs, entry, pinned):
     """An external mzML (the reference implementation) becomes a first-class arm.
 
     v1 registered reference_mzml, printed its existence in preflight, and never read it -- so
-    every published SpeXtract-vs-the reference implementation ratio entered through an unguarded external procedure.
+    every published SpeXtractor-vs-the reference implementation ratio entered through an unguarded external procedure.
     An adopt stage gives the external file a sealed identity so the SAME search, scoring and
     truth stages run against it.
     """
@@ -1931,7 +1931,7 @@ def st_make_fake_d(path, mz_centers=(500.0, 600.0), width=25.0, serial="SER-1",
 
 
 FAKETOOL_SRC = r'''#!/usr/bin/env python3
-"""Stand-in for spextract, driven by $FAKETOOL_MODE. Used only by --selftest."""
+"""Stand-in for spextractor, driven by $FAKETOOL_MODE. Used only by --selftest."""
 import os, sys, xml.etree.ElementTree as ET
 sys.path.insert(0, %(harness)r)
 import bench2
@@ -2177,7 +2177,7 @@ def _selftest_env(tmp):
 
 
 def _plan(env, arms, samples=("dataset A",), sweeps=None, extra=None):
-    p = {"schema": "spextract.plan/2", "title": "selftest", "binary": str(env["tool"]),
+    p = {"schema": "spextractor.plan/2", "title": "selftest", "binary": str(env["tool"]),
          "threads": 2, "tcmalloc": False, "samples": list(samples), "arms": arms}
     if sweeps:
         p["sweeps"] = sweeps
@@ -2339,7 +2339,7 @@ def selftest_bench(env):
         _plan(env, [BASE_ARM, {"name": "t", "role": "treatment", "basline": "base",
                                "params": {"trace:ms1_split_valleys": 7.0}}]), reg))
     st.expect_abort("G-B01", "wrong plan schema version", lambda: load_plan(
-        _write_plan_raw(env, {"schema": "spextract.plan/1", "title": "x",
+        _write_plan_raw(env, {"schema": "spextractor.plan/1", "title": "x",
                               "binary": str(env["tool"]), "samples": ["dataset A"],
                               "arms": [BASE_ARM]}), reg))
 
@@ -2722,7 +2722,7 @@ def _selftest_end_to_end(st, env):
 
 
 def cmd_selftest(args):
-    tmp = Path(tempfile.mkdtemp(prefix="spextract-selftest-"))
+    tmp = Path(tempfile.mkdtemp(prefix="spextractor-selftest-"))
     keep = bool(args.keep)
     try:
         env = _selftest_env(tmp)

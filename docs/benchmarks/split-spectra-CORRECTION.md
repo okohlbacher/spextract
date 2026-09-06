@@ -36,7 +36,7 @@ to them.** Much of the union gain is unrealisable without raising `max_fragments
 
 ## 4. CODE BUG: consolidate's ion-mobility gate has never fired
 
-`src/spextract.cpp:1137` stamps IM on the **Precursor** (`prec.setDriftTime(pc.im)`).
+`src/spextractor.cpp:1137` stamps IM on the **Precursor** (`prec.setDriftTime(pc.im)`).
 Consolidation at **:1745** and **:1755** reads it from the **MSSpectrum**
 (`all_out[i].getDriftTime()`), which is never set and returns −1. The guard is
 

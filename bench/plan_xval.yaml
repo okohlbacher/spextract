@@ -9,7 +9,7 @@ title: "min_correlation tightening: portability to dataset B/dataset A (the entr
 # (b) not raise the entrapment error rate (scored after). If the direction flips sign on dataset B or dataset A,
 # the dataset D gain was sample-specific and the default stays at 0.3.
 samples: [dataset B, dataset A]
-binary: /path/to/scratch/OpenMS/build/bin/spextract
+binary: /path/to/scratch/OpenMS/build/bin/spextractor
 threads: 100
 arms:
   - name: base
