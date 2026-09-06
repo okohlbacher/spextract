@@ -30,6 +30,9 @@ scp -q src/TdfMzCalibration.h "$NODE":/scratch/kohlbach/OpenMS/src/openms/includ
 # The tool's other headers live next to its source in the OpenMS topp directory. They were copied by
 # hand once and then drifted: a rename left the cluster building against a stale TdfLoad.h. Sync them.
 scp -q src/TdfLoad.h src/MzPeakStreamLoad.h "$NODE":/scratch/kohlbach/OpenMS/src/topp/
+# The end-to-end suite lives at the deployment point and is what every verification run executes.
+# It drifted once already: a newly added check silently did not run because the copy was stale.
+scp -q test/test_spextractor.py "$NODE":/ceph/ibmi/abi/oliver/spextract/tools/
 # Refuse to deploy into a tree that has lost the calibration patch: it would build fine, silently
 # revert masses to the -5..-11 ppm chord, and record a clean-looking provenance [kimi review].
 ssh "$NODE" "grep -q TdfMzCalibration /scratch/kohlbach/OpenMS/src/openms/source/FORMAT/BrukerTimsFile.cpp" || {

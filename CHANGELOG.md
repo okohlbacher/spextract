@@ -8,6 +8,34 @@
   OpenMS patches and every document. The GitHub repositories moved with it; the old URLs redirect.
 
 ### Added
+- **`perf:malloc_trim`, on by default: the peak drops 26.6%.** The window loop's allocations stacked
+  on top of everything the loading and MS1 phases had freed but the allocator kept -- measured, that
+  floor is 138 GB at the loop start of a 2-hour acquisition. Returning it first (`malloc_trim(0)` at
+  the two phase boundaries, glibc only) takes the run's peak from **281.5 GB to 206.7 GB** for 12.7 s
+  of a 1,800 s run, with a byte-identical spectrum list. 92 of the 101 GB the allocator reported free
+  came back, so the pool is recoverable rather than lost to fragmentation.
+- **The trace record is 56 bytes, was 72.** It carried an 8-byte pointer to the store every trace of
+  a vector already shares and an 8-byte copy of a calibration factor the store holds per frame. The
+  span accessors take the store explicitly and the factor is a 4-byte frame index. Measured on a
+  2-hour acquisition this is the largest structure in the tool -- 2.1 billion records, 143.6 GiB at
+  72 bytes if simultaneous -- so 16 bytes off each is worth 16-24 GiB at the peak. A `static_assert`
+  pins the size.
+- **Third OpenMS patch: move operations for `MassTrace`.** The class declares a defaulted destructor
+  and copy operations, which suppresses the implicit moves, so every `std::move` of a mass trace --
+  in OpenMS's own vector growth and in the band and split gathering here -- deep-copied its points.
+  Two defaulted moves transfer instead; a `static_assert` on `is_nothrow_move_constructible` means a
+  tree without the patch does not build the tool.
+- **Memory and stage instrumentation**: allocator statistics (`mallinfo2`) at every milestone, so
+  free-but-retained memory is measured rather than inferred; the picked-MS1 peak count; per-window
+  seeds, parents to children, record and arena size and capacity; per-window stage seconds on every
+  exit of the window body; and an ordered slab digest under `SPEXTRACTOR_DET`.
+
+### Changed
+- **Renamed to SpeXtractor** (the previous name was taken): executable, class, namespace, macros and
+  environment variables, source and test file names, CMake project and target, CI workflows, the
+  OpenMS patches and every document. The GitHub repositories moved with it; the old URLs redirect.
+
+### Added
 - **Third OpenMS patch: move operations for `MassTrace`.** The class declares a defaulted destructor
   and copy operations, which suppresses the implicit moves, so every `std::move` of a mass trace --
   in OpenMS's own vector growth and in the band and split gathering here -- deep-copied its points.

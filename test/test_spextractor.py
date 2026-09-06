@@ -353,7 +353,20 @@ def main():
             "arena selftest did not report success:\n" + (r.stdout + r.stderr)[-1500:]
     check("MS1 arena compaction survives container order != offset order", c12)
 
-    total = 6 + 2 + 2 + 1 + 1
+    # 13: the concurrency cap is enforced. It used to be computed, logged and never checked: the
+    #     only bound was a byte budget that over-booked every window, so nothing ever throttled.
+    def c13():
+        import re
+        hw = lambda r: int(re.search(r"admission high-water (\d+) of (\d+)", r.stdout).group(1))
+        cap = lambda r: int(re.search(r"admission high-water (\d+) of (\d+)", r.stdout).group(2))
+        r1 = run(binary, inp, os.path.join(work, "cap1.mzML"), extra=("-perf:max_concurrent_windows", "1"), threads=4)
+        assert cap(r1) == 1 and hw(r1) <= 1, f"cap 1 admitted {hw(r1)} windows at once"
+        rN = run(binary, inp, os.path.join(work, "capN.mzML"), threads=4)
+        assert digest(os.path.join(work, "cap1.mzML")) == digest(os.path.join(work, "capN.mzML")), \
+            "the concurrency cap changed the output; results must be written to index-addressed slots"
+    check("the concurrency cap bounds admitted windows and does not change output", c13)
+
+    total = 6 + 2 + 2 + 1 + 1 + 1
     print(f"\n{total - len(fails)}/{total} checks passed" + (f"; FAILED: {', '.join(fails)}" if fails else ""))
     return 1 if fails else 0
 

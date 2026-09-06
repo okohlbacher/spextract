@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <cassert>
 #include <type_traits>
 #include <array>
 #include <functional>
@@ -209,8 +210,13 @@ namespace
   /// [dyn-mem] Bytes we may still allocate. MemAvailable is the kernel's own estimate of what
   /// can be handed out without swapping (it accounts for reclaimable page cache), which is the
   /// right quantity on a SHARED node -- MemFree would ignore cache and MemTotal would ignore
-  /// the other users. Add our own RSS back: memory we already hold is part of our budget, not
-  /// somebody else's. Returns 0 if unreadable, which the caller treats as "admit one at a time".
+  /// the other users. Returns 0 if unreadable, which the caller treats as "admit one at a time".
+  ///
+  /// It does NOT add our own RSS back any more. That was defensible when most of our resident set
+  /// was allocator memory we would reuse; with perf:malloc_trim returning it at the phase boundary
+  /// (measured 92 GB of 138 at the loop start), what remains resident during the loop is the
+  /// windows actually in flight -- memory that is spoken for, not budget. Counting it as available
+  /// double-booked exactly the bytes the gate exists to bound. [2026-09-06]
   static size_t availableBytes_()
   {
     std::ifstream mi("/proc/meminfo");
@@ -221,12 +227,8 @@ namespace
       if (line.rfind("MemAvailable:", 0) == 0)
       { avail_kb = strtoull(line.c_str() + 13, nullptr, 10); break; }
     if (!avail_kb) return 0;
-    std::ifstream st("/proc/self/status");
-    size_t rss_kb = 0;
-    while (st && std::getline(st, line))
-      if (line.rfind("VmRSS:", 0) == 0)
-      { rss_kb = strtoull(line.c_str() + 6, nullptr, 10); break; }
-    return (avail_kb + rss_kb) * 1024ull;
+
+    return avail_kb * 1024ull;
   }
 
   /// THE RT AXIS IS GLOBAL AND DISCRETE. Every acquired frame has one retention time, and every
@@ -261,7 +263,7 @@ namespace
     /// that still compare in m/z space, and the value actually written out is recomputed from these
     /// two at export. 0 means the trace came from the OpenMS detector, which has no bin.
     uint32_t tof = 0;
-    double   b = 0.0;
+    uint32_t bframe = 0;   ///< store-local frame whose factor calibrates `tof` (see bOf())
     /// THE PROFILE IS A SPAN, NOT A POINT LIST. A trace is contiguous in its window's frame
     /// sequence (with gaps the detector tolerates), so it needs an entry frame and its
     /// intensities -- not a frame per point and not a bin per point, which is what the three
@@ -273,7 +275,6 @@ namespace
     /// `frame0` is LOCAL to the store's frame table (a window's, or the MS1 map's) -- a
     /// window's consecutive frames are ~13 apart on the global RT axis, so a global entry
     /// frame would not be contiguous. See docs/TRACE-STRUCT-REDESIGN.md, revision 2.
-    const struct TraceStore* st = nullptr;   ///< set once the store is immutable (after merges)
     uint32_t frame0 = 0;   ///< first frame of the span, store-local
     uint32_t off = 0;      ///< offset of the span in the store's arena
     uint16_t len = 0;      ///< frames spanned (a gradient is ~1,400; asserted < 65536)
@@ -281,10 +282,6 @@ namespace
     uint16_t apex = 0;     ///< position of the apex within the span
     size_t np() const { return npts; }
     size_t span() const { return len; }
-    float  xv(size_t k) const;                       ///< intensity at span position k (0 = missing)
-    bool   real(size_t k) const { return xv(k) > 0.0f; }
-    uint32_t gframe(size_t k) const;                 ///< global RT-axis index of span position k
-    double rtAtSpan(size_t k) const { return rtAxis()[gframe(k)]; }
     void freeProfile() { len = 0; npts = 0; }        ///< the arena is the store's; nothing to free
   };
 
@@ -330,16 +327,31 @@ namespace
       return (uint32_t)base;
     }
   };
-  inline float    Trace::xv(size_t k) const { return st->inten[off + k]; }
-  inline uint32_t Trace::gframe(size_t k) const { return st->rt_index[frame0 + k]; }
+  static_assert(sizeof(Trace) == 56, "Trace must stay 56 bytes: it is the largest structure in the tool "
+                                    "(2.1e9 records on a 2-h file), and a silent 8-byte regrowth costs ~16 GiB");
+
+  /// Span accessors take the owning store EXPLICITLY. Every trace of a vector shares one store, so
+  /// a per-record 8-byte back-pointer bought nothing but 8 bytes x 2.1e9 records on a 2-h file.
+  /// The store is an argument, not a member: passing the wrong one is the failure mode this
+  /// replaces, so it is asserted in a debug build rather than left to a silent wrong-arena read.
+  inline float xv(const TraceStore& s, const Trace& t, size_t k)
+  { assert(t.off + k < s.inten.size()); return s.inten[t.off + k]; }
+  inline bool real(const TraceStore& s, const Trace& t, size_t k) { return xv(s, t, k) > 0.0f; }
+  inline uint32_t gframe(const TraceStore& s, const Trace& t, size_t k)
+  { assert(t.frame0 + k < s.rt_index.size()); return s.rt_index[t.frame0 + k]; }
+  inline double rtAtSpan(const TraceStore& s, const Trace& t, size_t k) { return rtAxis()[gframe(s, t, k)]; }
+  /// The calibration factor of the trace's own apex/measurement frame. Empty table (the OpenMS
+  /// detector has no per-frame factors) yields 0.0, which is what the field held there before, and
+  /// exportMz_ returns the cached m/z for those traces because their `tof` is 0.
+  inline double bOf(const TraceStore& s, const Trace& t) { return s.b.empty() ? 0.0 : s.b[t.bframe]; }
 
   /// The real points of a trace, packed in frame order, for the consumers that were written over
   /// point lists (smoother, FWHM): identical sequences, so identical arithmetic.
-  inline void packReal(const Trace& t, vector<double>& rt, vector<double>& v)
+  inline void packReal(const TraceStore& s, const Trace& t, vector<double>& rt, vector<double>& v)
   {
     rt.clear(); v.clear();
     for (size_t k = 0; k < t.span(); ++k)
-      if (t.real(k)) { rt.push_back(t.rtAtSpan(k)); v.push_back((double)t.xv(k)); }
+      if (real(s, t, k)) { rt.push_back(rtAtSpan(s, t, k)); v.push_back((double)xv(s, t, k)); }
   }
 
   /// TRIM a trace to at most `cap` seconds around its apex, AFTER detection and valley splitting
@@ -354,7 +366,7 @@ namespace
   ///     part of a chromatographic peak -- real peaks here are 5-30 s wide.
   /// On the span representation this is free: three integers move, no bytes are copied. The arena
   /// still holds the untrimmed bytes; reclaiming them needs a compaction pass (MS1 already has one).
-  inline void trimToSpan(Trace& t, double cap)
+  inline void trimToSpan(const TraceStore& s, Trace& t, double cap)
   {
     if (cap <= 0.0 || t.span() == 0) return;
     const size_t a = t.apex;
@@ -365,8 +377,8 @@ namespace
     {
       const bool can_lo = lo > 0, can_hi = hi + 1 < t.span();
       if (!can_lo && !can_hi) break;
-      const double d_lo = can_lo ? t.rtAtSpan(hi) - t.rtAtSpan(lo - 1) : 1e30;
-      const double d_hi = can_hi ? t.rtAtSpan(hi + 1) - t.rtAtSpan(lo) : 1e30;
+      const double d_lo = can_lo ? rtAtSpan(s, t, hi) - rtAtSpan(s, t, lo - 1) : 1e30;
+      const double d_hi = can_hi ? rtAtSpan(s, t, hi + 1) - rtAtSpan(s, t, lo) : 1e30;
       if (d_lo <= d_hi) { if (!can_lo || d_lo > cap) { if (!can_hi || d_hi > cap) break; ++hi; } else --lo; }
       else              { if (!can_hi || d_hi > cap) { if (!can_lo || d_lo > cap) break; --lo; } else ++hi; }
     }
@@ -374,11 +386,11 @@ namespace
     // growing outward from the apex can stop on a gap, and a leading or trailing zero is pure
     // padding: it costs 4 B, it is skipped by every consumer, and it makes `span()` overstate the
     // trace. Interior zeros are the gaps and MUST stay -- they are the presence encoding.
-    while (lo < hi && t.xv(lo) == 0.0f) ++lo;
-    while (hi > lo && t.xv(hi) == 0.0f) --hi;
+    while (lo < hi && xv(s, t, lo) == 0.0f) ++lo;
+    while (hi > lo && xv(s, t, hi) == 0.0f) --hi;
     if (lo == 0 && hi + 1 == t.span()) return;                  // already within the cap, ends real
     uint16_t np = 0;
-    for (size_t k = lo; k <= hi; ++k) if (t.xv(k) > 0.0f) ++np;
+    for (size_t k = lo; k <= hi; ++k) if (xv(s, t, k) > 0.0f) ++np;
     t.frame0 += (uint32_t)lo; t.off += (uint32_t)lo;
     t.len = (uint16_t)(hi - lo + 1); t.apex = (uint16_t)(a - lo); t.npts = np;
   }
@@ -1093,7 +1105,7 @@ namespace
       Trace t = makeSpan(pts, store);
       store.bins.resize(store.inten.size(), 0u);
       for (const auto& g : got) store.bins[t.off + (g.first - t.frame0)] = sl.tof[g.second];
-      t.tof = sl.tof[kap]; t.b = sl.b[fap];
+      t.tof = sl.tof[kap]; t.bframe = fap;   // got-order first max: the frame the bin was measured on
       t.mz = cmz;                                              // the weighted centroid, as OpenMS reports
       t.rt = rtAxis()[sl.rt_index[fap]];
       t.im = IM_LO + cim / IM_Q;
@@ -1159,8 +1171,8 @@ namespace
         pk.clear();
         for (size_t k = 0; k < t.span(); ++k)                 // REAL points only: EPD smooths what it is given
         {
-          if (!t.real(k)) continue;
-          Peak2D pt; pt.setRT(t.rtAtSpan(k)); pt.setIntensity(t.xv(k));
+          if (!real(wst, t, k)) continue;
+          Peak2D pt; pt.setRT(rtAtSpan(wst, t, k)); pt.setIntensity(xv(wst, t, k));
           const uint32_t bin = wst.bins.empty() ? 0u : wst.bins[t.off + k];
           pt.setMZ(ax.ok && bin ? ax.mzOf(bin, wst.b[t.frame0 + k]) : t.mz);
           pk.push_back(pt);
@@ -1182,9 +1194,10 @@ namespace
           Trace c = toTrace(cm, cst);
           if (c.np() == 0) continue;
           const uint32_t cf = c.frame0 + c.apex;               // apex frame, window-local
-          c.b = wst.b.empty() ? ax.factor(0) : wst.b[cf];
+          c.bframe = cf;
+          const double cb = wst.b.empty() ? ax.factor(0) : wst.b[cf];
           const double amz = cm.getSize() ? cm[cm.findMaxByIntPeak(false)].getMZ() : c.mz;
-          c.tof = ax.ok ? ax.tofOf(amz, c.b) : 0u;
+          c.tof = ax.ok ? ax.tofOf(amz, cb) : 0u;
           out.push_back(std::move(c));
         }
       }
@@ -1447,11 +1460,11 @@ namespace
   /// OWN sampling. Sampling is read per-trace rather than assumed: diaPASEF cycles are regular, but
   /// a valley-split trace can carry gaps, and a fixed level count would then smooth different
   /// physical widths on different traces.
-  int atrousLevels(const Trace& tr, double scale_sec)
+  int atrousLevels(const TraceStore& s, const Trace& tr, double scale_sec)
   {
     if (tr.np() < 5 || scale_sec <= 0.0) return 0;
     thread_local vector<double> prt, pv;
-    packReal(tr, prt, pv);                             // the smoother's gaps are between REAL points
+    packReal(s, tr, prt, pv);                          // the smoother's gaps are between REAL points
     vector<double> d;
     d.reserve(prt.size());
     for (size_t i = 1; i < prt.size(); ++i)
@@ -1488,7 +1501,7 @@ namespace
     const size_t F = wst.frames();
     g.used.assign(F, 0);
     for (const auto& f : frags)
-      for (size_t k = 0; k < f.span(); ++k) if (f.real(k)) g.used[f.frame0 + k] = 1;
+      for (size_t k = 0; k < f.span(); ++k) if (real(wst, f, k)) g.used[f.frame0 + k] = 1;
     for (char u : g.used) g.G += u ? 1 : 0;
     const double G = (double)g.G;
     // Precursor points live on MS1 frames; each maps to the NEAREST window frame that carries real
@@ -1512,7 +1525,7 @@ namespace
     {
       const Trace& f = frags[(size_t)ii];
       double sum = 0, sumsq = 0;
-      for (size_t k = 0; k < f.span(); ++k) { const double v = f.xv(k); if (v > 0.0) { sum += v; sumsq += v * v; } }
+      for (size_t k = 0; k < f.span(); ++k) { const double v = xv(wst, f, k); if (v > 0.0) { sum += v; sumsq += v * v; } }
       g.mean[ii] = sum / G;
       const double var = sumsq - G * g.mean[ii] * g.mean[ii];
       g.invnorm[ii] = var > 0 ? 1.0 / sqrt(var) : 0.0;  // 0 => constant/degenerate -> never correlates
@@ -1643,6 +1656,14 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     registerDoubleOption_("consolidate:delta_im", "<1/K0>", 0.02, "Precursor IM tolerance for feature consolidation. Set larger than the 12 m/z x 2 IM sub-range split to merge a feature emitted from BOTH IM sub-ranges.", false, true);
     registerFlag_("consolidate:same_charge_only", "Only merge spectra that also agree in charge (safer; leaves genuine multi-charge observations intact).");
 
+    registerStringOption_("perf:malloc_trim", "<true/false>", "true",
+                          "Return the allocator's free pages to the OS at the two phase boundaries (glibc only). "
+                          "The window loop's allocations otherwise stack on top of everything the loading and MS1 "
+                          "phases freed but the allocator kept: measured on a 2-h acquisition, that floor is 138 GB "
+                          "at the loop start, and trimming it first takes the run's PEAK from 281.5 to 206.7 GB "
+                          "(-26.6%) for 12.7 s of a 1,800 s run, with byte-identical output. Turn it off to measure "
+                          "the allocator's behaviour, not because it costs anything.", false);
+    setValidStrings_("perf:malloc_trim", {"true", "false"});
     registerStringOption_("perf:stream_load", "<true/false>", "true",
                           "[stream] Read the .d frame-by-frame via BrukerTimsFile::loadDIAStreaming, "
                           "peak-picking and compacting each frame on arrival, instead of loadExperiment() "
@@ -1958,7 +1979,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
   /// coincidental peak at the right m/z spacing usually does not.
   /// Pearson correlation of two elution profiles over their shared frames. On a global axis the
   /// intersection is an integer merge -- no RT comparison, no tolerance, no binary search.
-  static double xicCorr(const Trace& a, const Trace& b, double /*rt_tol*/)
+  static double xicCorr(const TraceStore& s, const Trace& a, const Trace& b, double /*rt_tol*/)
   {
     // both are MS1 traces on the same frame table: the shared frames are the overlap of the two
     // spans, and a frame counts only where BOTH have a real point -- the old index intersection
@@ -1967,7 +1988,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     const uint32_t hi = std::min(a.frame0 + a.len, b.frame0 + b.len);
     for (uint32_t f = lo; f < hi; ++f)
     {
-      const double x = a.xv(f - a.frame0), y = b.xv(f - b.frame0);
+      const double x = xv(s, a, f - a.frame0), y = xv(s, b, f - b.frame0);
       if (x > 0.0 && y > 0.0) { sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; ++m; }
     }
     if (m < 3) return -2.0;
@@ -1977,7 +1998,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
 
   /// [route-1] Isotope/charge inference on MS1 traces. Scores each (charge, monoisotope) hypothesis
   /// by averagine-shape agreement x isotope-XIC co-elution, instead of counting partners.
-  vector<Precursor_> inferPrecursors_(const vector<Trace>& ms1, int max_charge,
+  vector<Precursor_> inferPrecursors_(const vector<Trace>& ms1, const TraceStore& ms1st, int max_charge,
                                       double delta_rt, double iso_im_tol, double mass_ppm,
                                       bool envelope_scoring, double ambig_margin)
   {
@@ -2121,9 +2142,9 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         pc0.mono_mz = best_mono;
         // Carry the bin of whichever trace the monoisotope call landed on, so the exported mass is
         // calibrated from a measurement rather than from a number that passed through the gates.
-        pc0.mono_tof = ms1[seed].tof; pc0.mono_b = ms1[seed].b;
+        pc0.mono_tof = ms1[seed].tof; pc0.mono_b = bOf(ms1st, ms1[seed]);
         for (size_t j : best_partners)
-          if (ms1[j].mz == best_mono) { pc0.mono_tof = ms1[j].tof; pc0.mono_b = ms1[j].b; break; }
+          if (ms1[j].mz == best_mono) { pc0.mono_tof = ms1[j].tof; pc0.mono_b = bOf(ms1st, ms1[j]); break; }
         pc0.charge = best_z;                    // 0 => unknown, default_charge applied later
         pc0.n_isotopes = best_n;                // [Q4] envelope confidence for the mono call
         out.push_back(pc0);
@@ -2172,7 +2193,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
 
           double csum = 0.0; int cn = 0;
           for (int k = 1; k <= 3; ++k)
-            if (iso_idx[k] >= 0) { csum += xicCorr(ms1[iso_idx[0]], ms1[iso_idx[k]], delta_rt); ++cn; }
+            if (iso_idx[k] >= 0) { csum += xicCorr(ms1st, ms1[iso_idx[0]], ms1[iso_idx[k]], delta_rt); ++cn; }
           const double mean_corr = cn ? std::max(0.0, csum / cn) : 0.0;
 
           // Composite: shape AND co-elution must BOTH hold, WEIGHTED BY EVIDENCE.
@@ -2195,7 +2216,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       if (hyps.empty())
       {
         pc.mono_mz = s.mz; pc.charge = 0;   // no envelope evidence at all -> unknown charge
-      pc.mono_tof = s.tof; pc.mono_b = s.b;
+      pc.mono_tof = s.tof; pc.mono_b = bOf(ms1st, s);
         out.push_back(pc);
         used[seed] = true;
         continue;
@@ -2222,9 +2243,9 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       });
       const Hyp& best = hyps[0];
       pc.mono_mz = best.mono; pc.charge = best.z;
-      pc.mono_tof = s.tof; pc.mono_b = s.b;
+      pc.mono_tof = s.tof; pc.mono_b = bOf(ms1st, s);
       for (size_t j : best.partners)
-        if (ms1[j].mz == best.mono) { pc.mono_tof = ms1[j].tof; pc.mono_b = ms1[j].b; break; }
+        if (ms1[j].mz == best.mono) { pc.mono_tof = ms1[j].tof; pc.mono_b = bOf(ms1st, ms1[j]); break; }
       // partners + the seed = envelope size. `members` excludes the seed, so this is the whole
       // envelope only because the seed is always one of its peaks. [adv-review kimi 2026-09-03]
       pc.n_isotopes = 1 + (int)best.partners.size();   // [Q4] envelope confidence for the mono call
@@ -2347,9 +2368,9 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
   /// candidate fragment compute the Pearson correlation and, if >= min_corr, call emit(fi, corr).
   /// Shared by the per-precursor path and the competitive (best-precursor) assignment. [bench]
   template <class Emit>
-  void scoreCandidates_(const Precursor_& pc, const vector<Trace>& frag_traces,
+  void scoreCandidates_(const Precursor_& pc, const vector<Trace>& frag_traces, const TraceStore& wst,
                         const vector<double>& frag_im, const FragRt& frag_rt,
-                        const vector<Trace>& ms1_traces,
+                        const vector<Trace>& ms1_traces, const TraceStore& ms1st,
                         const FragStats& fg, double delta_im, double delta_rt, double min_corr,
                         int min_corr_pts, vector<float>& pdense, Emit&& emit) const
   {
@@ -2363,11 +2384,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     const vector<double>* p_int = nullptr;
     if (wl_scale_ > 0.0)
     {
-      const int lv = atrousLevels(p_tr, wl_scale_);
+      const int lv = atrousLevels(ms1st, p_tr, wl_scale_);
       if (lv > 0)
       {
         thread_local vector<double> raw_i, sm_i, raw_rt;   // window loop is parallel; scratch is per-thread
-        packReal(p_tr, raw_rt, raw_i);               // the smoother runs over the REAL points, packed
+        packReal(ms1st, p_tr, raw_rt, raw_i);               // the smoother runs over the REAL points, packed
         atrousSmooth(raw_i, lv, sm_i);
         p_int = &sm_i;
       }
@@ -2377,8 +2398,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     size_t pi = 0;                                    // index among REAL points (matches the packed smoother)
     for (size_t k = 0; k < p_tr.span(); ++k)
     {
-      if (!p_tr.real(k)) continue;
-      const double pval = p_int ? (*p_int)[pi] : (double)p_tr.xv(k);
+      if (!real(ms1st, p_tr, k)) continue;
+      const double pval = p_int ? (*p_int)[pi] : (double)xv(ms1st, p_tr, k);
       ++pi;
       const int gi = fg.nearest_local[p_tr.frame0 + k];   // MS1 frame -> window frame, precomputed
       if (gi >= 0) { if (pdense[gi] == 0.0f) touched.push_back(gi); pdense[gi] += (float)pval; }
@@ -2428,7 +2449,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
         if (f.np() < (size_t)std::max(min_corr_pts, 0)) continue;
         // two sequential streams: the fragment's span in the arena and pdense over window frames
         for (size_t k = 0; k < f.span(); ++k)
-        { const float fv = f.xv(k); if (fv == 0.0f) continue;
+        { const float fv = xv(wst, f, k); if (fv == 0.0f) continue;
           const float pv = pdense[f.frame0 + k]; if (pv != 0.0f) { dot += (double)pv * fv; ++overlap; } }
         if (overlap < min_corr_pts) continue;                          // overlap guard [H-4]
         // [B0] Pearson takes variance over the FULL grid G, so a fragment present in 5 of ~1300
@@ -2449,7 +2470,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           // over f.support are accumulated here (support is tiny, so a second pass is negligible).
           double fsum = 0.0, fsumsq = 0.0;
           for (size_t k = 0; k < f.span(); ++k)
-          { const double fv = f.xv(k); if (fv > 0.0) { fsum += fv; fsumsq += fv * fv; } }
+          { const double fv = xv(wst, f, k); if (fv > 0.0) { fsum += fv; fsumsq += fv * fv; } }
           double n = (double)(touched.size() + f.np() - (size_t)overlap);
           double pm = psum / n, fm = fsum / n;
           double pv2 = psumsq - n * pm * pm, fv2 = fsumsq - n * fm * fm;
@@ -2468,12 +2489,12 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           // which is what Pearson gets right and the first version did not.
           double fsum = 0.0;
           for (size_t k = 0; k < f.span(); ++k)
-          { const double fv = f.xv(k); if (fv > 0.0) fsum += std::log1p(fv); }
+          { const double fv = xv(wst, f, k); if (fv > 0.0) fsum += std::log1p(fv); }
           if (fsum <= 0.0 || plogsum <= 0.0) continue;
           double inter = 0.0;
           for (size_t k = 0; k < f.span(); ++k)
           {
-            const double fv = f.xv(k); if (fv <= 0.0) continue;
+            const double fv = xv(wst, f, k); if (fv <= 0.0) continue;
             inter += std::min(std::log1p(fv) / fsum,
                               std::log1p((double)pdense[f.frame0 + k]) / plogsum);
           }
@@ -2622,11 +2643,10 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       for (int i = 0; i < 40; ++i) ps.emplace_back((uint32_t)(40 + i), 100.0f);
       for (int i = 0; i < 3; ++i)  pt.emplace_back((uint32_t)i, 1.0f);
       Trace fast = makeSpan(pf, ts), slow = makeSpan(ps, ts), tiny = makeSpan(pt, ts);
-      fast.st = &ts; slow.st = &ts; tiny.st = &ts;
-      const int lf = atrousLevels(fast, 4.0), ls = atrousLevels(slow, 4.0);
+      const int lf = atrousLevels(ts, fast, 4.0), ls = atrousLevels(ts, slow, 4.0);
       chk(lf > ls, "levels scale with sampling (finer dt -> more levels)");
-      chk(atrousLevels(fast, 0.0) == 0, "scale 0 disables smoothing");
-      chk(atrousLevels(tiny, 4.0) == 0, "too-short XIC -> 0 levels");
+      chk(atrousLevels(ts, fast, 0.0) == 0, "scale 0 disables smoothing");
+      chk(atrousLevels(ts, tiny, 4.0) == 0, "too-short XIC -> 0 levels");
       ax = saved;
     }
 
@@ -2717,18 +2737,18 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
   /// Per-precursor assembly: this precursor claims every fragment passing its gate (a fragment may
   /// be shared across precursors -> chimeric). Leaves @p out empty on failure.
   void assembleOne_(const Precursor_& pc, double win_lo, double win_hi,
-                    const vector<Trace>& frag_traces, const vector<double>& frag_im,
+                    const vector<Trace>& frag_traces, const TraceStore& wst, const vector<double>& frag_im,
                     const FragRt& frag_rt,
-                    const vector<Trace>& ms1_traces, const FragStats& fg,
+                    const vector<Trace>& ms1_traces, const TraceStore& ms1st, const FragStats& fg,
                     double delta_im, double delta_rt, double min_corr, int min_corr_pts,
                     Size min_frags, Size max_frags, vector<float>& pdense, MSSpectrum& out) const
   {
     vector<pair<double, double>> frags;
     vector<double> frag_scores;
-    scoreCandidates_(pc, frag_traces, frag_im, frag_rt, ms1_traces, fg, delta_im, delta_rt, min_corr,
+    scoreCandidates_(pc, frag_traces, wst, frag_im, frag_rt, ms1_traces, ms1st, fg, delta_im, delta_rt, min_corr,
                      min_corr_pts, pdense, [&](size_t fi, double c) {
       const auto [inten, emit_inten] = weighted_(frag_traces[fi].intensity, c, frag_im[fi] - pc.im);
-      frags.emplace_back(exportMz_(frag_traces[fi].tof, frag_traces[fi].b, frag_traces[fi].mz), emit_inten);
+      frags.emplace_back(exportMz_(frag_traces[fi].tof, bOf(wst, frag_traces[fi]), frag_traces[fi].mz), emit_inten);
       frag_scores.push_back(c * inten);
     });
     assembleFromList_(pc, win_lo, win_hi, frags, frag_scores, min_frags, max_frags, out);
@@ -2787,6 +2807,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       return {(int)llround(lo * 100.0), (int)llround(hi * 100.0), (int)window_group};
     };
     const bool stream_load = (getStringOption_("perf:stream_load") == "true");
+    const bool trim_on = (getStringOption_("perf:malloc_trim") == "true");
     bool streamed = false;
 
     if (stream_load)
@@ -3009,9 +3030,8 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     #pragma omp single
     ms1_traces = detectTraces_(ms1_map, ms1_store, delta_im, getDoubleOption_("trace:noise_threshold_int"),
                                              ms1_snr, getDoubleOption_("trace:min_length_sec"), getDoubleOption_("trace:ms1_min_sample_rate"), max_trace_len, getDoubleOption_("trace:ms1_split_valleys"), &ms1_span, ms1_bands);
-    for (auto& t : ms1_traces) t.st = &ms1_store;          // the store is immutable from here
     { const double cap = getDoubleOption_("trace:max_span_sec");
-      if (cap > 0.0) for (auto& t : ms1_traces) trimToSpan(t, cap); }
+      if (cap > 0.0) for (auto& t : ms1_traces) trimToSpan(ms1_store, t, cap); }
     if (detOn_()) writeLogInfo_("[det] MS1 traces n=" + String(ms1_traces.size()) + " digest=" + String(traceDigest_(ms1_traces)));
     { auto& st = phase_stats_()["MS1_TRACE"]; if (st.n++ == 0) phase_order_().push_back("MS1_TRACE");
       st.wall += phase_clock_() - _t_ms1; st.cpu += cpu_seconds_() - _c_ms1; st.rss_end_mb = rss_mb_(); }
@@ -3033,7 +3053,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       for (const auto& t : ms1_traces)
       {
         if (t.np() < 5) continue;
-        packReal(t, prt, pv);                         // walk REAL points: a gap is not a zero crossing
+        packReal(ms1_store, t, prt, pv);              // walk REAL points: a gap is not a zero crossing
         size_t ap = 0;
         for (size_t i = 1; i < pv.size(); ++i) if (pv[i] > pv[ap]) ap = i;
         const double half = pv[ap] * 0.5;
@@ -3132,7 +3152,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     });
     double _t_win = 0, _c_win = 0;                             // [perf-instr] window loop (function scope)
     double _t_inf = phase_clock_(), _c_inf = cpu_seconds_();   // [perf-instr]
-    vector<Precursor_> precursors = inferPrecursors_(ms1_traces, max_charge, delta_rt, iso_im_tol,
+    vector<Precursor_> precursors = inferPrecursors_(ms1_traces, ms1_store, max_charge, delta_rt, iso_im_tol,
                                                      mass_ppm, env_scoring, ambig_margin);
     if (detOn_())
     {
@@ -3227,9 +3247,9 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       // Apex, then walk outwards to half maximum with linear interpolation between samples;
       // -1 when the trace never falls to half max on both sides (truncated peak), which must be
       // reported rather than silently imputed -- a truncated peak is not a narrow one.
-      auto fwhm_of = [](const Trace& tr) -> double {
+      auto fwhm_of = [&ms1_store](const Trace& tr) -> double {
         if (tr.np() < 3) return -1.0;
-        vector<double> prt, pv; packReal(tr, prt, pv);
+        vector<double> prt, pv; packReal(ms1_store, tr, prt, pv);
         size_t ap = 0;
         for (size_t i = 1; i < pv.size(); ++i) if (pv[i] > pv[ap]) ap = i;
         const double half = pv[ap] * 0.5;
@@ -3302,6 +3322,14 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       // compactUnreferenced() for why container order corrupted ~1% of the kept spans.
       const Size freed = compactUnreferenced(ms1_traces, ms1_store, needed);
       writeLogInfo_("Released XICs of " + String(freed) + " unreferenced MS1 traces." + rss_() + mem_());
+#ifdef __GLIBC__
+    if (trim_on)
+    { const double _tt = phase_clock_(); const long _r0 = rss_mb_();
+      malloc_trim(0);
+      writeLogInfo_("[trim] MS1 -> window loop: " + String(_r0) + " -> " + String(rss_mb_()) + " MB RSS in "
+                    + String(phase_clock_() - _tt) + " s" + mem_());
+    }
+#endif
     }
     writeLogInfo_(clk_() + " Detected " + String(ms1_traces.size()) + " MS1 traces -> " + String(precursors.size())
                   + " precursor hypotheses (" + String(n_default) + " assigned default charge)." + rss_());
@@ -3454,14 +3482,21 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     }
     const double mem_frac = getDoubleOption_("perf:mem_fraction");
     std::atomic<size_t> inflight{0};
+    std::atomic<int> adm_hwm{0};   // high-water mark of admitted windows, for the log and the e2e
     // Projected footprint per window, from its own compact size. RE-CALIBRATED 2026-09-03: the
     // 10x multiplier booked the average dataset A window at 8.9 GB against a measured 12-14 GB, i.e. it
     // under-booked by 35-55% in the UNSAFE direction -- it admitted more windows than fit. That was
     // survivable while the thread grid capped concurrency at 8 anyway; with the task pool, memory
     // is the only bound, so the estimate has to be honest. [adv-review kimi 2026-09-03]
+    // RE-CALIBRATED AGAIN 2026-09-06, this time against the per-window [mem] lines rather than a
+    // multiplier: over 28 windows of a 2-h acquisition the SUSTAINED footprint of a window is
+    // ~44 B per compact peak (slab 10 + seed order 3.8 + band/visited ~6 + trace records 51 at
+    // 0.21 parents + 0.28 children per peak x 56 B + span arena 4.4 + scoring copies 12.9, minus
+    // the stages that do not coexist). The old 16x of the COMPACT BYTES booked 160 B/peak, i.e.
+    // 3.6x the sustained figure, which is why the gate never throttled anything.
     auto project = [&](const vector<CompactFrame>& fr) {
-      size_t b = 0; for (const auto& f : fr) b += f.bytes();
-      return (size_t)(b * 16.0) + (size_t)256 * 1024 * 1024;
+      size_t peaks = 0; for (const auto& f : fr) peaks += f.mzq.size();
+      return peaks * (size_t)44 + (size_t)256 * 1024 * 1024;
     };
     writeLogInfo_("Processing " + String(window_list.size()) + " isolation windows (OpenMP over windows, <="
                   + String(n_conc) + " concurrent, admission bounded by " + String((int)(mem_frac * 100))
@@ -3484,10 +3519,28 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
     // steal across window boundaries, so the tail of one window is filled by another's bands.
     // Output is unaffected: every result is written to an index-addressed slot (win_out[wi],
     // pslot[pi-plo], per[b]), never appended in completion order.
+    // [admit] The master admits BEFORE spawning: the byte budget and the window cap are both
+    // enforced by construction, and no worker thread sits in a spin loop holding a slot it cannot
+    // use. `perf:max_concurrent_windows` was computed and logged but never actually checked --
+    // the only bound was the byte gate, which over-booked by 3.6x, so nothing ever throttled.
+    std::atomic<int> active{0};
     #pragma omp parallel num_threads(n_threads)
     #pragma omp single
     for (long wi = 0; wi < (long)window_list.size(); ++wi)
     {
+      {
+        const size_t need = project(*window_list[wi].second);
+        for (;;)
+        {
+          const size_t budget = (size_t)(availableBytes_() * mem_frac);
+          // "at least one": an empty pipeline always admits, however large the window
+          if ((active.load() == 0) || (active.load() < n_conc && inflight.load() + need <= budget)) break;
+          #pragma omp taskyield
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        inflight += need; ++active;
+        if (active.load() > adm_hwm.load()) adm_hwm.store(active.load());
+      }
       #pragma omp task default(shared) firstprivate(wi)
       {
       // A lambda, because `continue` is not a legal exit from a task's structured block and the
@@ -3497,24 +3550,10 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
       {
         const double win_lo = window_list[wi].first[0] / 100.0;
         const double win_hi = window_list[wi].first[1] / 100.0;
-        // [dyn-mem] wait for room before materialising anything
+        // admitted by the master before this task existed; release both charges however we leave
         const size_t need = project(*window_list[wi].second);
-        for (;;)
-        {
-          bool go = false;
-          #pragma omp critical(admit)
-          {
-            const size_t budget = (size_t)(availableBytes_() * mem_frac);
-            // "at least one": an empty pipeline always admits, however large the window
-            if (inflight.load() == 0 || inflight.load() + need <= budget) { inflight += need; go = true; }
-          }
-          if (go) break;
-          // The master is one of the workers: run queued tasks while waiting for memory rather
-          // than sleeping on a thread the pool could be using.
-          #pragma omp taskyield
-          std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        struct Release { std::atomic<size_t>& c; size_t n; ~Release() { c -= n; } } rel{inflight, need};
+        struct Release { std::atomic<size_t>& b; std::atomic<int>& a; size_t n;
+                         ~Release() { b -= n; --a; } } rel{inflight, active, need};
         // Per-window stage seconds and the completion line, printed on EVERY exit of the body
         // (empty window, any assembly arm, exception): what the profile could only infer. [mem]
         double w_prep = 0, w_trace = 0, w_split = 0, w_score = 0, w_emit = 0;
@@ -3635,7 +3674,6 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
             }
           }
           if (thi <= tlo || nb == 1) { const uint32_t base = wst.absorb(bst[0]); for (auto& t : frag_traces) t.off += base; }
-          for (auto& t : frag_traces) t.st = &wst;
           }                                                  // tprep dies here
           // The slab is dead too: valley splitting reads only the window store (which copied the
           // frame table) and the spans. Holding 12 GB of peaks plus the prep across the stage where
@@ -3651,8 +3689,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           auto _ts = std::chrono::steady_clock::now();
           frag_traces = splitIntegerTraces(frag_traces, ms2_split, wst, std::max(1, w_bands) * 4);
           w_split = secs(std::chrono::steady_clock::now() - _ts);
-          for (auto& t : frag_traces) t.st = &wst;
-          if (max_span > 0.0) for (auto& t : frag_traces) trimToSpan(t, max_span);
+          if (max_span > 0.0) for (auto& t : frag_traces) trimToSpan(wst, t, max_span);
           vector<uint32_t>().swap(wst.bins);
           writeLogInfo_("[mem] window " + String(win_lo) + "-" + String(win_hi) + ": seeds " + String(n_seeds) + " of " + String(n_peaks)
                         + " peaks (" + String((int)(1000.0 * n_seeds / std::max<size_t>(n_peaks, 1)) / 10.0) + "%); traces " + String(n_parents)
@@ -3666,8 +3703,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
             for (const auto& sp : wmap) ri.push_back(rtIndex(sp.getRT()));
             wst.setFrames(ri, nullptr); }
           frag_traces = detectTraces_(wmap, wst, delta_im, ms2_noise, ms2_snr, ms2_minlen, ms2_msr, max_trace_len, ms2_split, &ms2_span, w_bands);
-          for (auto& t : frag_traces) t.st = &wst;
-          if (max_span > 0.0) for (auto& t : frag_traces) trimToSpan(t, max_span);
+          if (max_span > 0.0) for (auto& t : frag_traces) trimToSpan(wst, t, max_span);
         }
         // the window's spans and records, released with the window (the old add-only line was
         // cumulative over the run, not a peak)
@@ -3735,7 +3771,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           {
             const Precursor_& pc = precursors[pi];
             if (!std::isfinite(pc.rt) || !std::isfinite(pc.im)) continue;
-            scoreCandidates_(pc, frag_traces, frag_im, frag_rt, ms1_traces, fg, delta_im, delta_rt, min_corr,
+            scoreCandidates_(pc, frag_traces, wst, frag_im, frag_rt, ms1_traces, ms1_store, fg, delta_im, delta_rt, min_corr,
                              min_corr_pts, pdense, [&](size_t fi, double c) {
               wsum[fi] += (float)std::pow(std::max(c, 0.0), apportion);
             });
@@ -3746,11 +3782,11 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
             if (!std::isfinite(pc.rt) || !std::isfinite(pc.im)) continue;
             vector<pair<double, double>> frags;
             vector<double> frag_scores;
-            scoreCandidates_(pc, frag_traces, frag_im, frag_rt, ms1_traces, fg, delta_im, delta_rt, min_corr,
+            scoreCandidates_(pc, frag_traces, wst, frag_im, frag_rt, ms1_traces, ms1_store, fg, delta_im, delta_rt, min_corr,
                              min_corr_pts, pdense, [&](size_t fi, double c) {
               const double w = wsum[fi] > 0.0f ? std::pow(std::max(c, 0.0), apportion) / wsum[fi] : 1.0;
               const auto [inten, emit_inten] = weighted_(frag_traces[fi].intensity * w, c, frag_im[fi] - pc.im);   // [E5]
-              frags.emplace_back(exportMz_(frag_traces[fi].tof, frag_traces[fi].b, frag_traces[fi].mz), emit_inten);
+              frags.emplace_back(exportMz_(frag_traces[fi].tof, bOf(wst, frag_traces[fi]), frag_traces[fi].mz), emit_inten);
               frag_scores.push_back(c * inten);
             });
             MSSpectrum ms2;
@@ -3796,7 +3832,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
             const Precursor_& pc = precursors[pi];
             if (!std::isfinite(pc.rt) || !std::isfinite(pc.im)) continue;
             MSSpectrum ms2;
-            assembleOne_(pc, win_lo, win_hi, frag_traces, frag_im, frag_rt, ms1_traces, fg,
+            assembleOne_(pc, win_lo, win_hi, frag_traces, wst, frag_im, frag_rt, ms1_traces, ms1_store, fg,
                          delta_im, delta_rt, min_corr, min_corr_pts, min_frags, max_frags, pdense, ms2);
             if (!ms2.empty()) pslot[pi - plo] = std::move(ms2);
           }
@@ -3820,7 +3856,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
           {
             const Precursor_& pc = precursors[pi];
             if (!std::isfinite(pc.rt) || !std::isfinite(pc.im)) continue;
-            scoreCandidates_(pc, frag_traces, frag_im, frag_rt, ms1_traces, fg, delta_im, delta_rt, min_corr,
+            scoreCandidates_(pc, frag_traces, wst, frag_im, frag_rt, ms1_traces, ms1_store, fg, delta_im, delta_rt, min_corr,
                              min_corr_pts, pdense, [&](size_t fi, double c) {
               ++nfan[fi];
               auto& tk = topk[fi];
@@ -3860,7 +3896,7 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
               double c = -1.0;
               for (auto& cp : topk[fi]) if (cp.second == kv2.first) { c = cp.first; break; }
               const auto [inten, emit_inten] = weighted_(frag_traces[fi].intensity, c, frag_im[fi] - pc.im);   // [E5]
-              frags.emplace_back(exportMz_(frag_traces[fi].tof, frag_traces[fi].b, frag_traces[fi].mz), emit_inten);
+              frags.emplace_back(exportMz_(frag_traces[fi].tof, bOf(wst, frag_traces[fi]), frag_traces[fi].mz), emit_inten);
               frag_scores.push_back(c * inten);
             }
             MSSpectrum ms2;
@@ -3905,7 +3941,16 @@ registerIntOption_("trace:frame_aggregation_ms1_n", "<n>", 1, "[cross-frame] Sam
 
     { auto& st = phase_stats_()["WINDOW_LOOP"]; if (st.n++ == 0) phase_order_().push_back("WINDOW_LOOP");
       st.wall += phase_clock_() - _t_win; st.cpu += cpu_seconds_() - _c_win; st.rss_end_mb = rss_mb_(); }
-    writeLogInfo_("All windows done." + clk_() + rss_() + mem_()); // parallel-phase peak? [mem]
+    writeLogInfo_("All windows done (admission high-water " + String(adm_hwm.load()) + " of "
+                  + String(n_conc) + " allowed concurrent windows)." + clk_() + rss_() + mem_()); // [mem]
+#ifdef __GLIBC__
+    if (trim_on)
+    { const double _tt = phase_clock_(); const long _r0 = rss_mb_();
+      malloc_trim(0);
+      writeLogInfo_("[trim] window loop -> write: " + String(_r0) + " -> " + String(rss_mb_()) + " MB RSS in "
+                    + String(phase_clock_() - _tt) + " s" + mem_());
+    }
+#endif
     {
       // These are CPU-seconds summed across threads, not wall time -- a stage that runs on 20
       // threads contributes 20x its wall. That is the right denominator for "where does the work

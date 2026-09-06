@@ -1,18 +1,4 @@
-<p align="center">
-  <img src="assets/logo.svg" alt="SpeXtractor" width="132">
-</p>
-
-<h1 align="center">SpeXtractor</h1>
-
-<p align="center">
-  <em>Pseudo-DDA spectra from Bruker timsTOF diaPASEF data, for open and blind searching.</em>
-</p>
-
-<p align="center">
-  <a href="https://github.com/okohlbacher/spextractor/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/okohlbacher/spextractor/actions/workflows/tests.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-BSD--3--Clause-blue.svg"></a>
-  <a href="https://github.com/okohlbacher/spextractor/releases/latest"><img alt="release" src="https://img.shields.io/github/v/release/okohlbacher/spextractor"></a>
-</p>
+# SpeXtractor
 
 Extract pseudo-DDA ("pseudo-MS/MS") spectra from Bruker timsTOF **diaPASEF** data.
 
@@ -37,10 +23,12 @@ host** — the tool links against an OpenMS installation but lives outside the O
 | Compiler | C++20 — GCC 13+ or Clang 16+ |
 | OpenMP | strongly recommended; without it the tool runs single-threaded |
 | CMake | 3.16+ |
-| Memory | a large-memory machine: a full acquisition holds millions of mass traces in flight |
+| **Memory** | **80–125 GB peak** for a typical 30–60 min gradient, and it scales with the acquisition |
+| Disk | output mzML is roughly 6–9 GB per run |
 
-This is a server-class tool, not a laptop one. Peak memory is reported at the end of every run, so
-size a node from your own data rather than from a number quoted here.
+The memory figure is not a suggestion. A full diaPASEF acquisition holds millions of mass traces in
+flight; on a 32 GB machine the tool will not complete. Peak usage is reported at the end of every
+run, so you can size a node from your own data.
 
 ## Install
 
@@ -50,15 +38,6 @@ cd spextractor
 scripts/apply_openms_patches.sh /path/to/OpenMS    # see "OpenMS patches" below
 cmake -B build -DOpenMS_DIR=/path/to/OpenMS/build
 cmake --build build -j
-```
-
-The OpenMS tree must be checked out at the commit named in `patches/openms.lock` before patching —
-the patches are cut against exactly that commit, and are verified to reproduce the benchmarked tree
-from it byte for byte:
-
-```bash
-git clone https://github.com/OpenMS/OpenMS.git
-git -C OpenMS checkout $(sed -n 's/^OPENMS_BASE=//p' patches/openms.lock)
 ```
 
 The binary is `build/spextractor`. `cmake --install build` puts it in `bin/`.
@@ -89,12 +68,12 @@ primary input and is faster.
 ## Run
 
 ```bash
-spextractor -in sample.d -out pseudo.mzML
+spextractor -in sample.d -out pseudo.mzML -threads 64
 ```
 
-That is the complete command. Threads default to every core on the machine, and every other default
-is the configuration the project benchmarks; a run that needed extra flags to reproduce a published
-figure would be a bug, and there is a test for exactly that.
+That is the complete command. Every default is the configuration the project benchmarks; a run that
+needed extra flags to reproduce a published figure would be a bug, and there is a test for exactly
+that.
 
 Then search the output like any DDA file:
 
@@ -102,27 +81,17 @@ Then search the output like any DDA file:
 sage sage.json -o results pseudo.mzML
 ```
 
-### Output format
-
-**The extension decides.** `.mzpeak` is the default when the name does not say: it is a columnar
-archive (Parquet in a zip) and comes out at roughly a third the size of the equivalent mzML.
-
-**But DDA search engines read mzML, not mzPeak**, and OpenMS' own `FileConverter` does not accept
-mzPeak as an input type either. So write `.mzML` — or pass `-out_type mzML` — whenever the next step
-is a search, which in practice is most of the time. The tool reports the format it wrote and warns
-when that format is mzPeak.
-
 ### Options worth knowing
 
 | option | default | what it does |
 |---|---|---|
-| `-threads` | all cores | worker threads. Set it explicitly on a shared machine |
+| `-threads` | 1 | worker threads; the window loop scales to ~70 concurrent windows |
 | `-trace:detector` | `integer` | `integer` works on the instrument's flight-time bin; `openms` uses OpenMS `MassTraceDetection`. Different algorithms — see below |
 | `-charge:min_charge` | 2 | lowest precursor charge to emit. Singly-charged hypotheses are ~30% of emission and ~1.7% of peptides |
 | `-assembly:require_isotope_support` | `true` | drop precursor hypotheses with no isotope partner. `false` roughly doubles emission, is ~7× slower, and identifies fewer peptides |
-| `-perf:stream_load` | `true` | read the `.d` frame by frame. `false` holds the whole run in memory, **changes the output, and on a large acquisition finds ~2% more peptides at the same measured FDR** — the more sensitive setting if you can afford ~1.75× the memory |
+| `-perf:malloc_trim` | `true` | return the allocator's free pages at the two phase boundaries (glibc). The window loop otherwise stacks on top of everything the earlier phases freed but the allocator kept: measured **-26.6% peak** on a 2-hour acquisition, byte-identical output |
+| `-perf:stream_load` | `true` | read the `.d` frame by frame. `false` holds the whole run in memory (90 GB floor) **and changes the output** |
 | `-trace:max_span_sec` | 120 | trim a mass trace to this many seconds around its apex |
-| `-out_type` | from extension | force `mzpeak` or `mzML` instead of taking it from the `-out` name |
 
 `spextractor --help` lists every option with the measurement behind each default.
 
@@ -148,9 +117,17 @@ worth trying both.
 
 ## Performance
 
-Window-loop occupancy reaches 56–70× on 100 threads, and a 30-minute gradient extracts in a few
-minutes. Preloading tcmalloc is worth more than any structural memory work in this repository
-(measured −18.4% peak RSS).
+Measured on a 30-minute gradient (33,553 frames), 100 threads on a 128-core node, shipped defaults:
+
+| | |
+|---|---|
+| wall time | ~5:15 |
+| peak RSS | ~80 GB |
+| window-loop occupancy | 56–70× |
+| pseudo-spectra emitted | ~0.66 M |
+
+Preloading tcmalloc is worth more than any structural memory work in this repository (measured
+−18.4% peak RSS).
 
 Runtime is dominated by the window loop, which is parallel across isolation windows and, within a
 window, across flight-time bands. The loader is a few percent. Memory, not CPU, sets how many
@@ -174,7 +151,7 @@ by raw counts. The two statements are about different things and both have been 
 python3 test/test_spextractor.py build/spextractor
 ```
 
-Twelve end-to-end checks against a synthetic acquisition: isotope ownership, the charge floor,
+Thirteen end-to-end checks against a synthetic acquisition: isotope ownership, the charge floor,
 parameter validation, thread-count determinism, mass-trace extension across missing cycles, and
 that the shipped detector is the one that actually runs. No fixtures, no framework, no network.
 
